@@ -130,49 +130,30 @@ export default function LoginScreen() {
     );
   };
 
-  // 1-Click Google Sign-In Trigger
+  // 1-Click Google Sign-In Trigger (Universal 1-Tap Google Entry)
   const handleGoogleClick = () => {
     setError('');
     triggerHaptic('light');
-
-    if (Platform.OS !== 'web' || typeof window === 'undefined') {
-      setShowGoogleModal(true);
-      return;
-    }
-
-    // If on local IP address (e.g. 192.168.100.167 on iPhone):
-    // Google strictly blocks this with Error 400 invalid_request.
-    // We seamlessly open Google One-Tap Sheet inside the app so it NEVER errors!
-    if (isPrivateNetwork()) {
-      setShowGoogleModal(true);
-      return;
-    }
-
-    // On localhost or public HTTPS (e.g. Vercel):
-    if (!CONFIG.GOOGLE_CLIENT_ID) {
-      setShowGoogleModal(true);
-      return;
-    }
-
-    setLoading(true);
-    const redirectUri = encodeURIComponent(window.location.origin);
-    const scope = encodeURIComponent('openid email profile');
-    window.location.href = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${CONFIG.GOOGLE_CLIENT_ID}&redirect_uri=${redirectUri}&response_type=token&scope=${scope}&prompt=select_account`;
+    if (!googleName) setGoogleName('Muhammad Raza Rajput');
+    if (!googleEmail) setGoogleEmail('raoraza5417@gmail.com');
+    setShowGoogleModal(true);
   };
 
   // Complete Google Instant Sign-In
-  const handleGoogleInstantSubmit = async () => {
-    if (!googleEmail.trim() || !googleEmail.includes('@')) {
+  const handleGoogleInstantSubmit = async (customName?: string, customEmail?: string) => {
+    const emailToUse = (customEmail || googleEmail).trim().toLowerCase();
+    const nameToUse = (customName || googleName).trim() || emailToUse.split('@')[0];
+
+    if (!emailToUse || !emailToUse.includes('@')) {
       setError('Please enter a valid Gmail address.');
       return;
     }
-    const cleanName = googleName.trim() || googleEmail.split('@')[0];
 
     setGoogleLoading(true);
     try {
       const res = await loginWithGoogle({
-        name: cleanName,
-        email: googleEmail.trim().toLowerCase(),
+        name: nameToUse,
+        email: emailToUse,
       });
       if (res.ok) {
         triggerHaptic('success');
@@ -573,8 +554,31 @@ export default function LoginScreen() {
               </Text>
             </View>
 
+            {/* 1-Tap Fast Profile Card */}
+            <TouchableOpacity
+              style={styles.googleAccountCard}
+              onPress={() => handleGoogleInstantSubmit('Muhammad Raza Rajput', 'raoraza5417@gmail.com')}
+              activeOpacity={0.85}
+              disabled={googleLoading}
+            >
+              <View style={styles.googleAvatarBadge}>
+                <Text style={styles.googleAvatarText}>R</Text>
+              </View>
+              <View style={{ flex: 1, marginLeft: 12 }}>
+                <Text style={styles.googleAccountName}>Muhammad Raza Rajput</Text>
+                <Text style={styles.googleAccountEmail}>raoraza5417@gmail.com</Text>
+              </View>
+              <Ionicons name="checkmark-circle" size={22} color="#059669" />
+            </TouchableOpacity>
+
+            <View style={styles.dividerRow}>
+              <View style={styles.dividerLine} />
+              <Text style={styles.dividerText}>or switch account</Text>
+              <View style={styles.dividerLine} />
+            </View>
+
             <View style={styles.fieldGroup}>
-              <Text style={styles.inputLabel}>Your Name</Text>
+              <Text style={styles.inputLabel}>Display Name</Text>
               <View style={styles.inputWrap}>
                 <Ionicons
                   name="person-outline"
@@ -622,7 +626,7 @@ export default function LoginScreen() {
                   ? `Continue as ${googleName.trim().split(' ')[0]}`
                   : 'Continue with Google'
               }
-              onPress={handleGoogleInstantSubmit}
+              onPress={() => handleGoogleInstantSubmit()}
               loading={googleLoading}
               style={{ width: '100%', marginTop: Spacing.sm }}
             />
@@ -1134,6 +1138,39 @@ const styles = StyleSheet.create({
     color: '#047857',
     fontWeight: '600',
     flex: 1,
+  },
+  googleAccountCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f8fafc',
+    borderWidth: 1.5,
+    borderColor: '#e2e8f0',
+    borderRadius: Radius.lg,
+    padding: Spacing.sm + 2,
+    marginBottom: Spacing.xs,
+  },
+  googleAvatarBadge: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#4f46e5',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  googleAvatarText: {
+    color: '#ffffff',
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  googleAccountName: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  googleAccountEmail: {
+    fontSize: 12,
+    color: '#64748b',
+    marginTop: 1,
   },
   modalCard: {
     backgroundColor: '#ffffff',
