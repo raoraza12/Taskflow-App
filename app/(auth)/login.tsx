@@ -325,9 +325,11 @@ export default function LoginScreen() {
         <Animated.View entering={FadeInDown.duration(360).springify()} style={styles.content}>
           {/* App Header Branding */}
           <View style={styles.header}>
-            <View style={styles.logoBadge}>
-              <Ionicons name="checkbox" size={38} color={Colors.primary} />
-            </View>
+            <Image
+              source={require('../../assets/icon.png')}
+              style={styles.logoImage}
+              resizeMode="contain"
+            />
             <Text style={styles.title}>TaskFlow</Text>
             <Text style={styles.subtitle}>
               Team sprint workspace & task governance
@@ -354,23 +356,6 @@ export default function LoginScreen() {
                 {loading ? 'Opening Google...' : 'Continue with Google'}
               </Text>
               <View style={styles.googleIconPlaceholder} />
-            </TouchableOpacity>
-
-            <Text style={styles.googleFastHint}>
-              ⚡ Official Google Account Chooser · accounts.google.com
-            </Text>
-
-            <TouchableOpacity
-              onPress={() => {
-                triggerHaptic('light');
-                setShowGoogleModal(true);
-              }}
-              style={{ marginTop: 8, alignSelf: 'center', paddingVertical: 4, paddingHorizontal: 8 }}
-              activeOpacity={0.7}
-            >
-              <Text style={{ fontSize: 12, color: Colors.primary, fontWeight: '600' }}>
-                Need Google Cloud setup steps or fast test login?
-              </Text>
             </TouchableOpacity>
 
             {/* Subtle Divider */}
@@ -560,11 +545,6 @@ export default function LoginScreen() {
               </Animated.View>
             )}
           </View>
-
-          {/* Privacy & Security Footnote */}
-          <Text style={styles.footerNote}>
-            🔒 End-to-end encrypted sprint workspace · No tracking
-          </Text>
         </Animated.View>
       </ScrollView>
 
@@ -872,6 +852,17 @@ const styles = StyleSheet.create({
   header: {
     alignItems: 'center',
     marginBottom: Spacing.lg,
+  },
+  logoImage: {
+    width: 60,
+    height: 60,
+    borderRadius: 16,
+    marginBottom: Spacing.sm,
+    shadowColor: Colors.primary,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.16,
+    shadowRadius: 10,
+    elevation: 3,
   },
   logoBadge: {
     width: 68,

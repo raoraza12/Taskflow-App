@@ -12,3 +12,4 @@ $fav.Save("public/favicon.png", [System.Drawing.Imaging.ImageFormat]::Png)
 $fav.Dispose()
 $bmp.Dispose()
 Write-Host "All icons converted to PNG successfully!"
+
