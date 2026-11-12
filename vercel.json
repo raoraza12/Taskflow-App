@@ -1,11 +1,10 @@
 {
-  "buildCommand": "npx expo export -p web",
+  "buildCommand": "npx expo export -p web && node -e \"const fs = require('fs'); fs.copyFileSync('dist/index.html', 'dist/404.html'); fs.copyFileSync('dist/index.html', 'dist/login.html'); if (!fs.existsSync('dist/login')) fs.mkdirSync('dist/login'); fs.copyFileSync('dist/index.html', 'dist/login/index.html');\"",
   "outputDirectory": "dist",
-  "cleanUrls": true,
   "rewrites": [
     {
       "source": "/(.*)",
-      "destination": "/index.html"
+      "destination": "/"
     }
   ]
 }

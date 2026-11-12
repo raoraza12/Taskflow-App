@@ -187,7 +187,7 @@ export default function DashboardScreen() {
         </LinearGradient>
       </Animated.View>
 
-      {/* 2. Simplified Action Dock: 3 Clear, Big Touch Targets */}
+      {/* 2. Simplified Action Dock: Clean, Big Touch Targets (No Unnecessary Clutter) */}
       <Animated.View
         entering={FadeInDown.delay(70).duration(300).springify()}
         style={styles.actionRow}
@@ -222,13 +222,13 @@ export default function DashboardScreen() {
           ]}
           onPress={() => {
             triggerHaptic('light');
-            router.push('/tasks/kanban');
+            router.push('/(tabs)/tasks');
           }}
           activeOpacity={0.7}
         >
-          <Ionicons name="albums-outline" size={17} color={currentTheme.colors.primary} />
+          <Ionicons name="checkbox-outline" size={17} color={currentTheme.colors.primary} />
           <Text style={[styles.actionSecondaryText, { color: currentTheme.colors.text }]}>
-            Kanban
+            All Tasks
           </Text>
         </TouchableOpacity>
 
@@ -243,13 +243,13 @@ export default function DashboardScreen() {
           ]}
           onPress={() => {
             triggerHaptic('light');
-            router.push('/tasks/calendar');
+            router.push('/tasks/kanban');
           }}
           activeOpacity={0.7}
         >
-          <Ionicons name="calendar-outline" size={17} color={currentTheme.colors.primary} />
+          <Ionicons name="albums-outline" size={17} color={currentTheme.colors.primary} />
           <Text style={[styles.actionSecondaryText, { color: currentTheme.colors.text }]}>
-            Calendar
+            Kanban
           </Text>
         </TouchableOpacity>
       </Animated.View>
