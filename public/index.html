@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="%LANG_ISO_CODE%">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, viewport-fit=cover, user-scalable=no"
+    />
+    <title>%WEB_TITLE%</title>
+
+    <!-- iOS Native App (PWA Standalone Mode - Prevents opening in Safari browser) -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="TaskFlow" />
+    <meta name="application-name" content="TaskFlow" />
+    <meta name="apple-touch-fullscreen" content="yes" />
+    <meta name="theme-color" content="#4f46e5" />
+
+    <link rel="apple-touch-icon" href="/icon.png" />
+    <link rel="manifest" href="/manifest.json" />
+
+    <!-- Style reset for React Native Web & mobile viewport -->
+    <style id="expo-reset">
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+        padding: 0;
+        background-color: #f8fafc;
+        overflow: hidden;
+        -webkit-touch-callout: none;
+        -webkit-user-select: none;
+        user-select: none;
+        -webkit-tap-highlight-color: transparent;
+      }
+      #root {
+        display: flex;
+        height: 100%;
+        flex: 1;
+      }
+    </style>
+
+    <script>
+      // iOS PWA link handler: keeps internal navigation inside standalone web clip
+      (function () {
+        if ('standalone' in window.navigator && window.navigator.standalone) {
+          document.addEventListener(
+            'click',
+            function (event) {
+              var target = event.target;
+              while (target && target.tagName !== 'A') {
+                target = target.parentNode;
+              }
+              if (
+                target &&
+                target.tagName === 'A' &&
+                target.href &&
+                target.target !== '_blank'
+              ) {
+                if (target.host === window.location.host) {
+                  event.preventDefault();
+                  window.location.href = target.href;
+                }
+              }
+            },
+            false
+          );
+        }
+      })();
+    </script>
+  </head>
+
+  <body>
+    <noscript> You need to enable JavaScript to run this app. </noscript>
+    <div id="root"></div>
+  </body>
+</html>
+
