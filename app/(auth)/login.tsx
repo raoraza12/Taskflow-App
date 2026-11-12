@@ -10,6 +10,7 @@ import {
   ActivityIndicator,
   Modal,
   Pressable,
+  Image,
 } from 'react-native';
 import Animated, { FadeInDown, FadeInUp } from 'react-native-reanimated';
 import { useApp } from '../../src/context/AppContext';
@@ -335,7 +336,7 @@ export default function LoginScreen() {
 
           {/* Authentication Main Card */}
           <View style={styles.card}>
-            {/* Primary Hero Action: Continue with Google */}
+            {/* Primary Hero Action: Continue with Google (Official 4-Color Google Identity) */}
             <TouchableOpacity
               style={styles.googleHeroBtn}
               onPress={handleGoogleClick}
@@ -343,12 +344,16 @@ export default function LoginScreen() {
               disabled={loading}
             >
               <View style={styles.googleIconBox}>
-                <Ionicons name="logo-google" size={20} color="#ea4335" />
+                <Image
+                  source={require('../../assets/google-g.png')}
+                  style={styles.googleGLogo}
+                  resizeMode="contain"
+                />
               </View>
               <Text style={styles.googleHeroBtnText}>
                 {loading ? 'Opening Google...' : 'Continue with Google'}
               </Text>
-              <Ionicons name="arrow-forward" size={17} color="#0f172a" style={{ opacity: 0.6 }} />
+              <View style={styles.googleIconPlaceholder} />
             </TouchableOpacity>
 
             <Text style={styles.googleFastHint}>
@@ -574,7 +579,11 @@ export default function LoginScreen() {
           <Pressable style={styles.googleModalCard} onPress={(e) => e.stopPropagation()}>
             <View style={styles.googleModalHeader}>
               <View style={styles.googleLogoCircle}>
-                <Ionicons name="logo-google" size={24} color="#ea4335" />
+                <Image
+                  source={require('../../assets/google-g.png')}
+                  style={{ width: 24, height: 24 }}
+                  resizeMode="contain"
+                />
               </View>
               <View style={{ flex: 1, marginLeft: Spacing.sm }}>
                 <Text style={styles.googleModalTitle}>Google Sign-In Setup & Test</Text>
@@ -905,34 +914,44 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
 
-  // Hero Google Button
+  // Hero Google Button (Official Google Identity Standards)
   googleHeroBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     backgroundColor: '#ffffff',
     borderWidth: 1.5,
-    borderColor: '#cbd5e1',
+    borderColor: '#dadce0',
     borderRadius: Radius.md + 2,
-    paddingVertical: 13,
+    paddingVertical: 12,
     paddingHorizontal: 16,
     shadowColor: '#000000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 6,
-    elevation: 1,
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.08,
+    shadowRadius: 4,
+    elevation: 2,
   },
   googleIconBox: {
-    width: 28,
-    height: 28,
+    width: 24,
+    height: 24,
     alignItems: 'center',
     justifyContent: 'center',
   },
+  googleGLogo: {
+    width: 22,
+    height: 22,
+  },
+  googleIconPlaceholder: {
+    width: 24,
+    height: 24,
+  },
   googleHeroBtnText: {
+    flex: 1,
+    textAlign: 'center',
     fontSize: 15,
-    fontWeight: '700',
-    color: '#0f172a',
-    letterSpacing: 0.1,
+    fontWeight: '600',
+    color: '#3c4043',
+    letterSpacing: 0.2,
   },
   googleFastHint: {
     fontSize: 11,

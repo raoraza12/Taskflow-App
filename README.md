@@ -1,35 +1,48 @@
-# TaskFlow 📱 (React Native / Expo Mobile App)
+# TaskFlow 📱 (React Native / Expo Mobile & Web App)
 
-Professional team task management app with **Supabase backend**, **App Lock security**, **Team Leader controls**, **Kanban board**, **Calendar view**, and **Task Attachments**.
+> 🌐 **Live Web App / PWA**: [https://taskflow-app-indol-rho.vercel.app](https://taskflow-app-indol-rho.vercel.app)  
+> 📦 **GitHub Repository**: [https://github.com/raoraza12/Taskflow-App](https://github.com/raoraza12/Taskflow-App)
+
+Professional team task management app with **Supabase backend**, **Google Verified OAuth**, **App Lock security**, **Team Leader governance**, **Kanban board**, **Calendar view**, and **Task Attachments**.
 
 ---
 
-## 🚀 How to Run on Your Phone (Instantly)
+## 📱 How to Run & Install on Mobile (iOS & Android)
 
-1. **Install Expo Go** on your phone:
-   - Android: [Google Play Store](https://play.google.com/store/apps/details?id=host.exp.exponent)
-   - iOS: [Apple App Store](https://apps.apple.com/app/expo-go/id982107779)
+### Option 1: Instant App Installation on iPhone (No App Store / No Expo Go needed!)
+1. Open **Safari** on your iPhone and visit:  
+   👉 **`https://taskflow-app-indol-rho.vercel.app`**
+2. Tap the **Share icon** (square with upward arrow `⬆️`) at the bottom of Safari.
+3. Tap **"Add to Home Screen"** and tap **Add**.
+4. The **TaskFlow app icon** appears on your home screen!
+5. Tap it to launch: it runs **full screen, standalone with 0 browser controls**, 120Hz smooth ProMotion, and zero SDK mismatch issues.
 
-2. **Start the development server**:
+### Option 2: Direct Installable APK for Android Users
+Generate a standalone `.apk` file that anyone can download and install:
+```bash
+npx eas login
+npx eas build -p android --profile preview
+```
+Yeh cloud pe build complete karke direct **`.apk` download link** generate karega jise WhatsApp ya drive ke zariye kisi bhi Android device par install kiya ja sakta hai.
+
+---
+
+## 🚀 How to Run in Local Development
+
+1. **Install Dependencies**:
    ```bash
-   npm start
+   npm install
    ```
 
-3. **Scan the QR Code**:
-   - On Android: Scan with the Expo Go app.
-   - On iOS: Scan with the default Camera app.
-   - App will instantly load on your phone!
+2. **Start Development Server**:
+   ```bash
+   npx expo start --clear
+   ```
 
----
-
-## 📦 How to Generate Direct APK (For Android Users)
-
-Agar aap bina Play Store ke seedha download link ya WhatsApp ke zariye APK dena chahte hain:
-```bash
-npx eas-cli login
-npx eas-cli build -p android --profile preview
-```
-Yeh cloud pe build karke aapko seedha **`.apk` download link** de dega!
+3. **Open on Devices**:
+   - Web: Press `w` in terminal or open `http://localhost:8081`
+   - Android: Scan QR code using Expo Go app
+   - iOS: Open live PWA link in Safari
 
 ---
 
