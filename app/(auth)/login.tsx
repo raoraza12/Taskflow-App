@@ -130,16 +130,34 @@ export default function LoginScreen() {
     );
   };
 
-  // 1-Click Google Sign-In Trigger (Universal 1-Tap Google Entry)
+  // 1-Click Official Google Sign-In Trigger (Direct to accounts.google.com)
   const handleGoogleClick = () => {
     setError('');
     triggerHaptic('light');
-    if (!googleName) setGoogleName('Muhammad Raza Rajput');
-    if (!googleEmail) setGoogleEmail('raoraza5417@gmail.com');
-    setShowGoogleModal(true);
+
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      if (isPrivateNetwork()) {
+        setError(
+          'Google blocks private local IP addresses (192.168.x.x). Please open TaskFlow on your live Vercel domain (https://taskflow-app-indol-rho.vercel.app) to sign in with Google!'
+        );
+        return;
+      }
+
+      setLoading(true);
+      const redirectUri = window.location.origin;
+      const scope = encodeURIComponent('openid email profile');
+      const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${CONFIG.GOOGLE_CLIENT_ID}&redirect_uri=${encodeURIComponent(
+        redirectUri
+      )}&response_type=token&scope=${scope}&prompt=select_account`;
+
+      window.location.href = authUrl;
+      return;
+    }
+
+    setError('Please sign in via the web app at https://taskflow-app-indol-rho.vercel.app');
   };
 
-  // Complete Google Instant Sign-In
+  // Complete Fast Test Sign-In
   const handleGoogleInstantSubmit = async (customName?: string, customEmail?: string) => {
     const emailToUse = (customEmail || googleEmail).trim().toLowerCase();
     const nameToUse = (customName || googleName).trim() || emailToUse.split('@')[0];
@@ -158,6 +176,7 @@ export default function LoginScreen() {
       if (res.ok) {
         triggerHaptic('success');
         setShowGoogleModal(false);
+        router.replace('/(tabs)');
       } else {
         triggerHaptic('error');
         setError(res.error || 'Google login failed');
@@ -182,10 +201,14 @@ export default function LoginScreen() {
       const res = await signIn(email, password);
       if (res.ok) {
         triggerHaptic('success');
+        router.replace('/(tabs)');
       } else {
         triggerHaptic('error');
         setError(res.error || 'Invalid credentials');
       }
+    } catch (err: any) {
+      triggerHaptic('error');
+      setError(err?.message || 'Sign in failed. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -214,10 +237,14 @@ export default function LoginScreen() {
       const res = await signUp(name, email, password);
       if (res.ok) {
         triggerHaptic('success');
+        router.replace('/(tabs)');
       } else {
         triggerHaptic('error');
         setError(res.error || 'Registration failed');
       }
+    } catch (err: any) {
+      triggerHaptic('error');
+      setError(err?.message || 'Registration failed. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -318,13 +345,28 @@ export default function LoginScreen() {
               <View style={styles.googleIconBox}>
                 <Ionicons name="logo-google" size={20} color="#ea4335" />
               </View>
-              <Text style={styles.googleHeroBtnText}>Continue with Google</Text>
+              <Text style={styles.googleHeroBtnText}>
+                {loading ? 'Opening Google...' : 'Continue with Google'}
+              </Text>
               <Ionicons name="arrow-forward" size={17} color="#0f172a" style={{ opacity: 0.6 }} />
             </TouchableOpacity>
 
             <Text style={styles.googleFastHint}>
-              ⚡ 1-Tap instant access · Zero password required
+              ⚡ Official Google Account Chooser · accounts.google.com
             </Text>
+
+            <TouchableOpacity
+              onPress={() => {
+                triggerHaptic('light');
+                setShowGoogleModal(true);
+              }}
+              style={{ marginTop: 8, alignSelf: 'center', paddingVertical: 4, paddingHorizontal: 8 }}
+              activeOpacity={0.7}
+            >
+              <Text style={{ fontSize: 12, color: Colors.primary, fontWeight: '600' }}>
+                Need Google Cloud setup steps or fast test login?
+              </Text>
+            </TouchableOpacity>
 
             {/* Subtle Divider */}
             <View style={styles.dividerRow}>
@@ -521,7 +563,7 @@ export default function LoginScreen() {
         </Animated.View>
       </ScrollView>
 
-      {/* Google One-Tap Modal Sheet (Instant, Zero-Error on Mobile & Local IP) */}
+      {/* Google Setup Guide & Fast Test Access Modal */}
       <Modal
         visible={showGoogleModal}
         transparent
@@ -535,8 +577,8 @@ export default function LoginScreen() {
                 <Ionicons name="logo-google" size={24} color="#ea4335" />
               </View>
               <View style={{ flex: 1, marginLeft: Spacing.sm }}>
-                <Text style={styles.googleModalTitle}>Sign in with Google</Text>
-                <Text style={styles.googleModalSub}>Fast 1-Tap authentication for TaskFlow</Text>
+                <Text style={styles.googleModalTitle}>Google Sign-In Setup & Test</Text>
+                <Text style={styles.googleModalSub}>OAuth 2.0 Whitelist Guide & Instant Entry</Text>
               </View>
               <TouchableOpacity
                 onPress={() => setShowGoogleModal(false)}
@@ -547,11 +589,31 @@ export default function LoginScreen() {
               </TouchableOpacity>
             </View>
 
-            <View style={styles.googleInfoBanner}>
-              <Ionicons name="shield-checkmark" size={16} color="#059669" />
-              <Text style={styles.googleInfoText}>
-                No password required. Connects securely with your Google profile.
+            {/* Instruction Banner */}
+            <View style={{ backgroundColor: '#f0fdf4', borderRadius: 10, padding: 12, borderWidth: 1, borderColor: '#bbf7d0', marginBottom: 14 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
+                <Ionicons name="information-circle" size={17} color="#16a34a" />
+                <Text style={{ fontSize: 13, fontWeight: '700', color: '#15803d', marginLeft: 6 }}>
+                  Google Cloud Whitelist (1 Minute)
+                </Text>
+              </View>
+              <Text style={{ fontSize: 12, color: '#334155', lineHeight: 17, marginBottom: 8 }}>
+                To enable Google's official accounts chooser on your domain without Error 400, add this URL to your Google Cloud Console:
               </Text>
+              <View style={{ backgroundColor: '#ffffff', borderRadius: 6, paddingVertical: 6, paddingHorizontal: 10, borderWidth: 1, borderColor: '#cbd5e1' }}>
+                <Text style={{ fontSize: 12, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', color: '#0f172a', fontWeight: '600' }} selectable>
+                  https://taskflow-app-indol-rho.vercel.app
+                </Text>
+              </View>
+              <Text style={{ fontSize: 11, color: '#64748b', marginTop: 6 }}>
+                Add to: 1) Authorized JavaScript origins · 2) Authorized redirect URIs
+              </Text>
+            </View>
+
+            <View style={styles.dividerRow}>
+              <View style={styles.dividerLine} />
+              <Text style={styles.dividerText}>or test sign-in instantly</Text>
+              <View style={styles.dividerLine} />
             </View>
 
             {/* 1-Tap Fast Profile Card */}
@@ -568,68 +630,17 @@ export default function LoginScreen() {
                 <Text style={styles.googleAccountName}>Muhammad Raza Rajput</Text>
                 <Text style={styles.googleAccountEmail}>raoraza5417@gmail.com</Text>
               </View>
-              <Ionicons name="checkmark-circle" size={22} color="#059669" />
+              <Ionicons name="flash" size={20} color="#4f46e5" />
             </TouchableOpacity>
 
-            <View style={styles.dividerRow}>
-              <View style={styles.dividerLine} />
-              <Text style={styles.dividerText}>or switch account</Text>
-              <View style={styles.dividerLine} />
+            <View style={{ marginTop: 10 }}>
+              <Button
+                title={googleLoading ? 'Signing in...' : 'Sign In as Raza Rajput (Instant)'}
+                onPress={() => handleGoogleInstantSubmit('Muhammad Raza Rajput', 'raoraza5417@gmail.com')}
+                loading={googleLoading}
+                style={{ width: '100%' }}
+              />
             </View>
-
-            <View style={styles.fieldGroup}>
-              <Text style={styles.inputLabel}>Display Name</Text>
-              <View style={styles.inputWrap}>
-                <Ionicons
-                  name="person-outline"
-                  size={18}
-                  color={Colors.muted}
-                  style={styles.inputLeftIcon}
-                />
-                <TextInput
-                  style={styles.textInput}
-                  placeholder="e.g. Sarah Khan"
-                  placeholderTextColor={Colors.subtext}
-                  value={googleName}
-                  onChangeText={setGoogleName}
-                  autoCapitalize="words"
-                />
-              </View>
-            </View>
-
-            <View style={styles.fieldGroup}>
-              <Text style={styles.inputLabel}>Google Email Address</Text>
-              <View style={styles.inputWrap}>
-                <Ionicons
-                  name="mail-outline"
-                  size={18}
-                  color={Colors.muted}
-                  style={styles.inputLeftIcon}
-                />
-                <TextInput
-                  style={styles.textInput}
-                  placeholder="yourname@gmail.com"
-                  placeholderTextColor={Colors.subtext}
-                  value={googleEmail}
-                  onChangeText={setGoogleEmail}
-                  autoCapitalize="none"
-                  keyboardType="email-address"
-                />
-              </View>
-            </View>
-
-            <Button
-              title={
-                googleLoading
-                  ? 'Connecting to Google...'
-                  : googleName.trim()
-                  ? `Continue as ${googleName.trim().split(' ')[0]}`
-                  : 'Continue with Google'
-              }
-              onPress={() => handleGoogleInstantSubmit()}
-              loading={googleLoading}
-              style={{ width: '100%', marginTop: Spacing.sm }}
-            />
           </Pressable>
         </Pressable>
       </Modal>
