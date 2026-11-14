@@ -87,13 +87,17 @@ export default function TeamsScreen() {
       joinPassword: joinPass,
     });
     if (res.ok) {
+      if (res.team) {
+        setSelectedTeamId(res.team.id);
+      }
+      const targetName = res.team?.name || joinName;
       setJoinName('');
       setJoinCode('');
       setJoinPass('');
       setShowJoinModal(false);
-      showAlert('Request Sent', 'Team Leader will review and approve your join request.');
+      showAlert('Welcome to the Team! 🎉', `You have successfully joined "${targetName}".`);
     } else {
-      setError(res.error || 'Failed to send request');
+      setError(res.error || 'Failed to join team');
     }
   };
 

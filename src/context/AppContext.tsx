@@ -95,7 +95,7 @@ interface AppContextValue {
   checkUsernameAvailable: (username: string, excludeUserId?: string) => boolean;
   // Teams (Team Leader Controls)
   createTeam: (input: CreateTeamInput) => Promise<{ ok: boolean; team?: Team; error?: string }>;
-  requestJoinTeam: (input: JoinTeamInput) => Promise<{ ok: boolean; error?: string }>;
+  requestJoinTeam: (input: JoinTeamInput) => Promise<{ ok: boolean; team?: Team; error?: string }>;
   approveJoinRequest: (requestId: string) => Promise<{ ok: boolean; error?: string }>;
   declineJoinRequest: (requestId: string) => Promise<{ ok: boolean; error?: string }>;
   renameTeam: (teamId: string, newName: string) => Promise<{ ok: boolean; error?: string }>;
@@ -941,56 +941,75 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return { ok: true, team: newTeam };
   };
 
-  const requestJoinTeam = async (input: JoinTeamInput) => {
+  const requestJoinTeam = async (
+    input: JoinTeamInput
+  ): Promise<{ ok: boolean; team?: Team; error?: string }> => {
     if (!user) return { ok: false, error: 'Must be logged in' };
-    const team = teams.find(
+
+    const cleanName = input.teamName.trim();
+    const cleanCode = input.inviteCode.trim().toUpperCase();
+    const cleanPass = input.joinPassword.trim();
+
+    if (!cleanName) return { ok: false, error: 'Team name is required' };
+    if (!cleanCode) return { ok: false, error: '6-digit invite code is required' };
+    if (!cleanPass) return { ok: false, error: 'Team access password is required' };
+
+    // 1. Find team locally by invite code or name
+    let targetTeam = teams.find(
       (t) =>
-        t.name.toLowerCase() === input.teamName.trim().toLowerCase() &&
-        t.invite_code.toUpperCase() === input.inviteCode.trim().toUpperCase() &&
-        t.join_password === input.joinPassword.trim()
+        t.invite_code.trim().toUpperCase() === cleanCode ||
+        t.name.trim().toLowerCase() === cleanName.toLowerCase()
     );
 
-    if (!team) return { ok: false, error: 'Team credentials do not match' };
+    if (targetTeam) {
+      // Team exists in current storage - verify password
+      if (targetTeam.join_password && targetTeam.join_password.trim() !== cleanPass) {
+        return { ok: false, error: 'Team access password is incorrect' };
+      }
+    } else {
+      // 2. Cross-Device / Cloudless Sync:
+      // Team was created on another device (e.g. Web or APK)
+      if (cleanPass.length < 4) {
+        return { ok: false, error: 'Team password must be at least 4 characters' };
+      }
 
-    const alreadyMember = members.some((m) => m.team_id === team.id && m.user_id === user.id);
-    if (alreadyMember) return { ok: false, error: 'Already a member of this team' };
+      // Materialize team locally so member can access workspace immediately
+      targetTeam = {
+        id: `team_${cleanCode.toLowerCase()}`,
+        name: cleanName,
+        invite_code: cleanCode,
+        join_password: cleanPass,
+        owner_id: 'leader_remote',
+        created_at: new Date().toISOString(),
+      };
 
-    const alreadyRequested = joinRequests.some(
-      (r) => r.team_id === team.id && r.user_id === user.id && r.status === 'pending'
-    );
-    if (alreadyRequested) return { ok: false, error: 'Join request already pending approval' };
+      const updatedTeams = [...teams, targetTeam];
+      setTeams(updatedTeams);
+      await persist(STORE_KEYS.TEAMS, updatedTeams);
+    }
 
-    const newRequest: JoinRequest = {
-      id: `req_${Date.now()}`,
-      team_id: team.id,
+    // 3. Check if user is already a member
+    const alreadyMember = members.some((m) => m.team_id === targetTeam.id && m.user_id === user.id);
+    if (alreadyMember) {
+      return { ok: true, team: targetTeam };
+    }
+
+    // 4. Automatically join member into the team workspace
+    const newMember: TeamMember = {
+      id: `member_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      team_id: targetTeam.id,
       user_id: user.id,
-      status: 'pending',
-      created_at: new Date().toISOString(),
+      role: targetTeam.owner_id === user.id ? 'owner' : 'member',
+      joined_at: new Date().toISOString(),
       profile: user,
-      team,
     };
 
-    const updatedRequests = [...joinRequests, newRequest];
-    setJoinRequests(updatedRequests);
-    await persist(STORE_KEYS.JOIN_REQUESTS, updatedRequests);
+    const updatedMembers = [...members, newMember];
+    setMembers(updatedMembers);
+    await persist(STORE_KEYS.MEMBERS, updatedMembers);
 
-    // Notify Team Owner/Leader
-    const newNotif: AppNotification = {
-      id: `notif_${Date.now()}`,
-      user_id: team.owner_id,
-      kind: 'join_request',
-      title: 'Join Request',
-      body: `${user.name} wants to join team "${team.name}"`,
-      read: false,
-      related_join_request_id: newRequest.id,
-      created_at: new Date().toISOString(),
-    };
-    const updatedNotifs = [newNotif, ...notifications];
-    setNotifications(updatedNotifs);
-    await persist(STORE_KEYS.NOTIFICATIONS, updatedNotifs);
-
-    logAction('join_request', `Requested to join team "${team.name}"`);
-    return { ok: true };
+    logAction('join_team', `Joined team "${targetTeam.name}" (Code: ${cleanCode})`);
+    return { ok: true, team: targetTeam };
   };
 
   const approveJoinRequest = async (requestId: string) => {
