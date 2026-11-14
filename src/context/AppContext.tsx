@@ -89,7 +89,13 @@ interface AppContextValue {
   loginWithGoogle: (profile: Partial<Profile>) => Promise<{ ok: boolean; error?: string }>;
   signUp: (name: string, email: string, password: string) => Promise<{ ok: boolean; error?: string }>;
   signIn: (email: string, password: string) => Promise<{ ok: boolean; error?: string }>;
-  updateProfile: (patch: { name?: string; picture?: string; username?: string }) => Promise<{ ok: boolean; error?: string }>;
+  updateProfile: (patch: {
+    name?: string;
+    picture?: string;
+    username?: string;
+    bio?: string;
+    job_title?: string;
+  }) => Promise<{ ok: boolean; error?: string }>;
   logout: () => void;
   // Username validation helper
   checkUsernameAvailable: (username: string, excludeUserId?: string) => boolean;
@@ -878,6 +884,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       ...user,
       ...(patch.name ? { name: patch.name.trim() } : {}),
       ...(patch.picture !== undefined ? { picture: patch.picture } : {}),
+      ...(patch.bio !== undefined ? { bio: patch.bio.trim() } : {}),
+      ...(patch.job_title !== undefined ? { job_title: patch.job_title.trim() } : {}),
       username: cleanedUsername,
     };
 
@@ -1008,6 +1016,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setMembers(updatedMembers);
     await persist(STORE_KEYS.MEMBERS, updatedMembers);
 
+    if (!users.some((u) => u.id === user.id)) {
+      const updatedUsers = [...users, user];
+      setUsers(updatedUsers);
+      await persist(STORE_KEYS.ALL_USERS, updatedUsers);
+    }
+
     logAction('join_team', `Joined team "${targetTeam.name}" (Code: ${cleanCode})`);
     return { ok: true, team: targetTeam };
   };
@@ -1034,6 +1048,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const updatedMembers = [...members, newMember];
     setMembers(updatedMembers);
     await persist(STORE_KEYS.MEMBERS, updatedMembers);
+
+    if (!users.some((u) => u.id === user.id)) {
+      const updatedUsers = [...users, user];
+      setUsers(updatedUsers);
+      await persist(STORE_KEYS.ALL_USERS, updatedUsers);
+    }
 
     const updatedRequests = joinRequests.map((r) =>
       r.id === requestId ? { ...r, status: 'approved' as const, resolved_at: new Date().toISOString() } : r
@@ -1192,8 +1212,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!user) return { ok: false, error: 'Must be logged in' };
     if (!input.title.trim()) return { ok: false, error: 'Task title is required' };
 
-    const taskId = `task_${Date.now()}`;
-    const isPersonal = Boolean(input.isPersonal || !input.teamId);
+    const now = new Date();
+    const hours = String(now.getHours()).padStart(2, '0');
+    const mins = String(now.getMinutes()).padStart(2, '0');
+    const presentMilitaryTime = `${hours}:${mins}`;
+    const presentFormattedTime = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
+    const currentIso = now.toISOString();
     const assignedDate = input.assignedDate || today;
 
     const newTask: Task = {
@@ -1207,11 +1231,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       status: input.status || 'todo',
       priority: input.priority || 'medium',
       assigned_date: assignedDate,
+      assigned_time: presentFormattedTime,
+      assigned_at: currentIso,
       due_date: input.dueDate || today,
-      start_time: input.startTime || '09:00',
-      end_time: input.endTime || '10:00',
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
+      start_time: input.startTime || presentMilitaryTime,
+      end_time: input.endTime || '18:00',
+      created_at: currentIso,
+      updated_at: currentIso,
     };
 
     const updatedTasks = [newTask, ...tasks];
@@ -1375,7 +1401,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       })
       .map((t) => ({
         ...t,
-        assignee: users.find((u) => u.id === t.assignee_id) || user || undefined,
+        assignee:
+          users.find((u) => u.id === t.assignee_id) ||
+          members.find((m) => m.user_id === t.assignee_id)?.profile ||
+          (t.assignee_id === user?.id ? user : undefined),
         subtasks: subtasks.filter((s) => s.task_id === t.id),
       }));
   }, [tasks, myTeamIds, users, user, subtasks]);

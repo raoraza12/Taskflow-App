@@ -15,9 +15,21 @@ import { TaskPriority, TaskStatus } from '../../src/types/database';
 import { THEMES } from '../../src/constants/theme';
 
 export default function CreateTaskScreen() {
-  const { user, teams, today, getTeamMembers, createTask, addSubtask, theme } = useApp();
+  const { user, users, teams, today, getTeamMembers, createTask, addSubtask, theme } = useApp();
   const currentTheme = THEMES[theme] || THEMES.snow;
   const router = useRouter();
+
+  // Present Time Auto-Calculation
+  const getPresentTime = () => {
+    const d = new Date();
+    const hours = String(d.getHours()).padStart(2, '0');
+    const mins = String(d.getMinutes()).padStart(2, '0');
+    return `${hours}:${mins}`;
+  };
+
+  const getPresentFormattedTime = () => {
+    return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
+  };
 
   // Mode: Personal Task vs Team Task
   const [isPersonal, setIsPersonal] = useState<boolean>(teams.length === 0);
@@ -28,11 +40,11 @@ export default function CreateTaskScreen() {
   const [status, setStatus] = useState<TaskStatus>('todo');
   const [priority, setPriority] = useState<TaskPriority>('medium');
 
-  // Dates: Assigned/Publish Date and Due Date
+  // Dates: Assigned/Publish Date and Due Date (Defaults to current moment)
   const [assignedDate, setAssignedDate] = useState(today);
   const [dueDate, setDueDate] = useState(today);
-  const [startTime, setStartTime] = useState('09:00');
-  const [endTime, setEndTime] = useState('10:00');
+  const [startTime, setStartTime] = useState(getPresentTime());
+  const [endTime, setEndTime] = useState('18:00');
 
   // Subtasks & File Attachments
   const [subtaskInput, setSubtaskInput] = useState('');
@@ -42,7 +54,53 @@ export default function CreateTaskScreen() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  const members = teamId ? getTeamMembers(teamId) : [];
+  // Get all members of the selected team workspace + workspace users
+  const rawMembers = teamId ? getTeamMembers(teamId) : [];
+  const allAvailableAssignees = React.useMemo(() => {
+    const list: Array<{
+      id: string;
+      user_id: string;
+      name: string;
+      username?: string;
+      role?: string;
+      picture?: string;
+      job_title?: string;
+    }> = [];
+    const seen = new Set<string>();
+
+    rawMembers.forEach((m) => {
+      const u = m.profile || users.find((usr) => usr.id === m.user_id);
+      if (u && !seen.has(u.id)) {
+        seen.add(u.id);
+        list.push({
+          id: m.id,
+          user_id: u.id,
+          name: u.name,
+          username: u.username,
+          role: m.role,
+          picture: u.picture,
+          job_title: u.job_title,
+        });
+      }
+    });
+
+    users.forEach((u) => {
+      if (!seen.has(u.id)) {
+        seen.add(u.id);
+        list.push({
+          id: `usr_${u.id}`,
+          user_id: u.id,
+          name: u.name,
+          username: u.username,
+          role: 'member',
+          picture: u.picture,
+          job_title: u.job_title,
+        });
+      }
+    });
+
+    return list;
+  }, [rawMembers, users]);
 
   const handleAddSubtaskItem = () => {
     if (!subtaskInput.trim()) return;
@@ -199,58 +257,64 @@ export default function CreateTaskScreen() {
             })}
           </ScrollView>
 
-          {/* Assignee Selection */}
+          {/* Assignee Teammates List - Shows All Team & Workspace Members */}
           <View style={styles.sectionHeaderRow}>
             <Ionicons name="person-add" size={16} color={currentTheme.colors.primary} />
             <Text style={[styles.sectionLabel, { color: currentTheme.colors.text }]}>
-              Assignee Teammate ({members.length})
+              Assignee Teammate ({allAvailableAssignees.length} Available)
             </Text>
           </View>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.horizontalChips}>
-            {members.map((m) => {
+          <View style={styles.assigneeGrid}>
+            {allAvailableAssignees.map((m) => {
               const isSelected = assigneeId === m.user_id;
+              const initial = (m.name || 'U')[0].toUpperCase();
               return (
-                <Pressable
+                <TouchableOpacity
                   key={m.id}
                   style={[
-                    styles.chipItem,
+                    styles.assigneeCard,
                     {
                       backgroundColor: isSelected ? currentTheme.colors.primaryLight : currentTheme.colors.bgElevated,
                       borderColor: isSelected ? currentTheme.colors.primary : currentTheme.colors.border,
                     },
                   ]}
                   onPress={() => setAssigneeId(m.user_id)}
+                  activeOpacity={0.8}
                 >
                   <View
                     style={[
-                      styles.miniAvatarDot,
-                      { backgroundColor: isSelected ? currentTheme.colors.primary : currentTheme.colors.subtext },
+                      styles.assigneeAvatar,
+                      { backgroundColor: isSelected ? currentTheme.colors.primary : '#475569' },
                     ]}
                   >
-                    <Text style={styles.miniAvatarDotText}>
-                      {m.profile?.name?.charAt(0).toUpperCase() || 'U'}
-                    </Text>
+                    <Text style={styles.assigneeAvatarText}>{initial}</Text>
                   </View>
-                  <View>
+                  <View style={{ flex: 1, marginLeft: 10 }}>
                     <Text
                       style={[
-                        styles.chipItemText,
+                        styles.assigneeName,
                         {
                           color: isSelected ? currentTheme.colors.primary : currentTheme.colors.text,
                           fontWeight: isSelected ? '700' : '600',
                         },
                       ]}
+                      numberOfLines={1}
                     >
-                      {m.profile?.name} {m.user_id === user?.id ? '(Me)' : ''}
+                      {m.name} {m.user_id === user?.id ? '(Me)' : ''}
                     </Text>
-                    {m.profile?.username ? (
-                      <Text style={styles.miniUsername}>@{m.profile.username}</Text>
-                    ) : null}
+                    <Text style={styles.assigneeSub} numberOfLines={1}>
+                      {m.job_title || (m.username ? `@${m.username}` : m.role || 'Member')}
+                    </Text>
                   </View>
-                </Pressable>
+                  {isSelected ? (
+                    <Ionicons name="checkmark-circle" size={19} color={currentTheme.colors.primary} />
+                  ) : (
+                    <View style={styles.unselectedRadio} />
+                  )}
+                </TouchableOpacity>
               );
             })}
-          </ScrollView>
+          </View>
         </>
       )}
 
@@ -347,19 +411,27 @@ export default function CreateTaskScreen() {
         placeholder="YYYY-MM-DD"
       />
 
+      {/* Present Time Auto-Sync Indicator */}
+      <View style={styles.timeSyncBadge}>
+        <Ionicons name="time" size={15} color="#059669" />
+        <Text style={styles.timeSyncText}>
+          Assignment Time automatically set to Present Time: {getPresentFormattedTime()}
+        </Text>
+      </View>
+
       <View style={styles.timeRow}>
         <View style={{ flex: 1, marginRight: Spacing.sm }}>
           <Input
-            label="Start Time"
-            placeholder="09:00"
+            label="Assigned / Start Time (Present)"
+            placeholder="HH:MM"
             value={startTime}
             onChangeText={setStartTime}
           />
         </View>
         <View style={{ flex: 1 }}>
           <Input
-            label="End Time"
-            placeholder="10:00"
+            label="Target End Time"
+            placeholder="18:00"
             value={endTime}
             onChangeText={setEndTime}
           />
@@ -545,6 +617,62 @@ const styles = StyleSheet.create({
   },
   selectorText: {
     fontSize: Typography.sm,
+  },
+  timeSyncBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(5, 150, 105, 0.08)',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: Radius.md,
+    marginBottom: Spacing.sm,
+    borderWidth: 1,
+    borderColor: 'rgba(5, 150, 105, 0.25)',
+  },
+  timeSyncText: {
+    fontSize: 12,
+    color: '#059669',
+    fontWeight: '600',
+    flex: 1,
+  },
+  assigneeGrid: {
+    gap: 8,
+    marginBottom: Spacing.md,
+  },
+  assigneeCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 10,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+  },
+  assigneeAvatar: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  assigneeAvatarText: {
+    color: '#ffffff',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  assigneeName: {
+    fontSize: 13,
+  },
+  assigneeSub: {
+    fontSize: 11,
+    color: '#64748b',
+    marginTop: 1,
+  },
+  unselectedRadio: {
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    borderWidth: 1.5,
+    borderColor: '#94a3b8',
   },
   timeRow: {
     flexDirection: 'row',

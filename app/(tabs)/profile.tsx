@@ -45,11 +45,24 @@ export default function ProfileScreen() {
   const router = useRouter();
 
   // Profile Edit State
+  const PRESET_ROLES = [
+    { label: 'UI/UX Designer', icon: 'color-palette-outline' },
+    { label: 'Web & App Developer', icon: 'code-slash-outline' },
+    { label: 'Graphic Designer', icon: 'brush-outline' },
+    { label: 'Digital Marketer', icon: 'trending-up-outline' },
+    { label: 'Product Manager', icon: 'rocket-outline' },
+    { label: 'Full Stack Engineer', icon: 'layers-outline' },
+  ];
+
   const [showEditModal, setShowEditModal] = useState(false);
   const [editName, setEditName] = useState(user?.name || '');
   const [editUsername, setEditUsername] = useState(user?.username || '');
   const [usernameError, setUsernameError] = useState('');
   const [editPicture, setEditPicture] = useState(user?.picture || '');
+  const [editBio, setEditBio] = useState(user?.bio || '');
+  const [selectedRole, setSelectedRole] = useState(user?.job_title || 'UI/UX Designer');
+  const [customRoleInput, setCustomRoleInput] = useState('');
+  const [isCustomRole, setIsCustomRole] = useState(false);
   const [customUrl, setCustomUrl] = useState('');
   const [savingProfile, setSavingProfile] = useState(false);
 
@@ -105,6 +118,24 @@ export default function ProfileScreen() {
     setEditUsername(user?.username || '');
     setUsernameError('');
     setEditPicture(user?.picture || '');
+    setEditBio(user?.bio || '');
+
+    const currentJob = user?.job_title || '';
+    const isPreset = PRESET_ROLES.some((r) => r.label === currentJob);
+    if (isPreset) {
+      setSelectedRole(currentJob);
+      setIsCustomRole(false);
+      setCustomRoleInput('');
+    } else if (currentJob) {
+      setSelectedRole('custom');
+      setIsCustomRole(true);
+      setCustomRoleInput(currentJob);
+    } else {
+      setSelectedRole(PRESET_ROLES[0].label);
+      setIsCustomRole(false);
+      setCustomRoleInput('');
+    }
+
     setCustomUrl('');
     setShowEditModal(true);
   };
@@ -173,10 +204,14 @@ export default function ProfileScreen() {
 
     setSavingProfile(true);
     const finalPicture = customUrl.trim() || editPicture;
+    const finalJobTitle = isCustomRole ? customRoleInput.trim() || 'Team Specialist' : selectedRole;
+
     const res = await updateProfile({
       name: editName.trim(),
       username: cleanUsername,
       picture: finalPicture,
+      bio: editBio.trim(),
+      job_title: finalJobTitle,
     });
     setSavingProfile(false);
     if (res.ok) {
@@ -290,10 +325,21 @@ export default function ProfileScreen() {
               </TouchableOpacity>
             </View>
 
-            <View style={styles.userHandlePill}>
-              <Ionicons name="at" size={12} color="#4f46e5" />
-              <Text style={styles.userHandleText}>{user?.username || 'member'}</Text>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginVertical: 4 }}>
+              <View style={styles.userHandlePill}>
+                <Ionicons name="at" size={12} color="#4f46e5" />
+                <Text style={styles.userHandleText}>{user?.username || 'member'}</Text>
+              </View>
+
+              <View style={styles.jobTitleBadge}>
+                <Ionicons name="briefcase-outline" size={12} color="#059669" />
+                <Text style={styles.jobTitleText}>{user?.job_title || 'UI/UX Designer'}</Text>
+              </View>
             </View>
+
+            <Text style={[styles.userBioText, { color: currentTheme.colors.subtext }]} numberOfLines={3}>
+              {user?.bio || 'No bio added yet. Tap Edit to introduce yourself to your teammates.'}
+            </Text>
 
             <Text style={[styles.userEmail, { color: currentTheme.colors.subtext }]}>{user?.email}</Text>
 
@@ -697,6 +743,88 @@ export default function ProfileScreen() {
                   </Text>
                 )}
               </View>
+
+              {/* Professional Role / Job Title Selector */}
+              <View style={{ marginBottom: Spacing.sm }}>
+                <Text style={styles.usernameInputLabel}>Professional Role / Designation</Text>
+                <View style={styles.roleChipsGrid}>
+                  {PRESET_ROLES.map((r) => {
+                    const isSelected = !isCustomRole && selectedRole === r.label;
+                    return (
+                      <TouchableOpacity
+                        key={r.label}
+                        style={[
+                          styles.roleChipBtn,
+                          isSelected && styles.roleChipBtnActive,
+                        ]}
+                        onPress={() => {
+                          setSelectedRole(r.label);
+                          setIsCustomRole(false);
+                        }}
+                        activeOpacity={0.75}
+                      >
+                        <Ionicons
+                          name={r.icon as any}
+                          size={14}
+                          color={isSelected ? '#ffffff' : '#4f46e5'}
+                          style={{ marginRight: 4 }}
+                        />
+                        <Text
+                          style={[
+                            styles.roleChipText,
+                            isSelected && styles.roleChipTextActive,
+                          ]}
+                        >
+                          {r.label}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                  <TouchableOpacity
+                    style={[
+                      styles.roleChipBtn,
+                      isCustomRole && styles.roleChipBtnActive,
+                    ]}
+                    onPress={() => setIsCustomRole(true)}
+                    activeOpacity={0.75}
+                  >
+                    <Ionicons
+                      name="add-circle-outline"
+                      size={14}
+                      color={isCustomRole ? '#ffffff' : '#4f46e5'}
+                      style={{ marginRight: 4 }}
+                    />
+                    <Text
+                      style={[
+                        styles.roleChipText,
+                        isCustomRole && styles.roleChipTextActive,
+                      ]}
+                    >
+                      + Custom Role
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+
+                {isCustomRole && (
+                  <View style={{ marginTop: 8 }}>
+                    <Input
+                      label="Custom Role / Title"
+                      placeholder="e.g. Lead Flutter Engineer"
+                      value={customRoleInput}
+                      onChangeText={setCustomRoleInput}
+                    />
+                  </View>
+                )}
+              </View>
+
+              {/* Bio Field */}
+              <Input
+                label="Personal Bio & About Me"
+                placeholder="Write a brief intro, skills, or what you work on..."
+                value={editBio}
+                onChangeText={setEditBio}
+                multiline
+              />
 
               <Input
                 label="Custom Image URL (Optional)"
@@ -1216,5 +1344,54 @@ const styles = StyleSheet.create({
     color: '#64748b',
     fontSize: 11,
     marginTop: 4,
+  },
+  jobTitleBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: 'rgba(5, 150, 105, 0.1)',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: Radius.full,
+  },
+  jobTitleText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#059669',
+  },
+  userBioText: {
+    fontSize: Typography.sm,
+    marginTop: 4,
+    marginBottom: 4,
+    lineHeight: 18,
+  },
+  roleChipsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: 4,
+    marginBottom: 6,
+  },
+  roleChipBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: Radius.full,
+    backgroundColor: 'rgba(79, 70, 229, 0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(79, 70, 229, 0.25)',
+  },
+  roleChipBtnActive: {
+    backgroundColor: '#4f46e5',
+    borderColor: '#4f46e5',
+  },
+  roleChipText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#4f46e5',
+  },
+  roleChipTextActive: {
+    color: '#ffffff',
   },
 });

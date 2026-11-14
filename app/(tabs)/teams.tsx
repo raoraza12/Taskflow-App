@@ -196,12 +196,18 @@ export default function TeamsScreen() {
             title="+ Join"
             variant="outline"
             size="sm"
-            onPress={() => setShowJoinModal(true)}
+            onPress={() => {
+              setError('');
+              setShowJoinModal(true);
+            }}
           />
           <Button
             title="+ Create"
             size="sm"
-            onPress={() => setShowCreateModal(true)}
+            onPress={() => {
+              setError('');
+              setShowCreateModal(true);
+            }}
           />
         </View>
       }

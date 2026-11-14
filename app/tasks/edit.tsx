@@ -18,6 +18,7 @@ export default function EditTaskScreen() {
   const {
     tasks,
     user,
+    users,
     getTeamMembers,
     updateTask,
     submitTask,
@@ -69,7 +70,46 @@ export default function EditTaskScreen() {
     );
   }
 
-  const members = task.team_id ? getTeamMembers(task.team_id) : [];
+  const rawMembers = task.team_id ? getTeamMembers(task.team_id) : [];
+  const allAvailableAssignees = React.useMemo(() => {
+    const list: Array<{
+      id: string;
+      user_id: string;
+      name: string;
+      username?: string;
+      role?: string;
+      job_title?: string;
+    }> = [];
+    const seen = new Set<string>();
+    rawMembers.forEach((m) => {
+      const u = m.profile || users.find((usr) => usr.id === m.user_id);
+      if (u && !seen.has(u.id)) {
+        seen.add(u.id);
+        list.push({
+          id: m.id,
+          user_id: u.id,
+          name: u.name,
+          username: u.username,
+          role: m.role,
+          job_title: u.job_title,
+        });
+      }
+    });
+    users.forEach((u) => {
+      if (!seen.has(u.id)) {
+        seen.add(u.id);
+        list.push({
+          id: `usr_${u.id}`,
+          user_id: u.id,
+          name: u.name,
+          username: u.username,
+          role: 'member',
+          job_title: u.job_title,
+        });
+      }
+    });
+    return list;
+  }, [rawMembers, users]);
   const isAssignee = task.assignee_id === user?.id;
 
   const handleSave = async () => {
@@ -155,15 +195,17 @@ export default function EditTaskScreen() {
         </View>
       )}
 
-      {/* 1. Assignee Selection (If Team Task) */}
-      {members.length > 0 && (
+      {/* 1. Assignee Selection */}
+      {allAvailableAssignees.length > 0 && (
         <>
           <View style={styles.sectionHeaderRow}>
             <Ionicons name="person" size={16} color={currentTheme.colors.primary} />
-            <Text style={[styles.sectionLabel, { color: currentTheme.colors.text }]}>Assignee Teammate</Text>
+            <Text style={[styles.sectionLabel, { color: currentTheme.colors.text }]}>
+              Assignee Teammate ({allAvailableAssignees.length} Members Available)
+            </Text>
           </View>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.horizontalChips}>
-            {members.map((m) => {
+            {allAvailableAssignees.map((m) => {
               const isSelected = assigneeId === m.user_id;
               return (
                 <Pressable
@@ -184,20 +226,25 @@ export default function EditTaskScreen() {
                     ]}
                   >
                     <Text style={styles.miniAvatarDotText}>
-                      {m.profile?.name?.charAt(0).toUpperCase() || 'U'}
+                      {(m.name || 'U').charAt(0).toUpperCase()}
                     </Text>
                   </View>
-                  <Text
-                    style={[
-                      styles.chipText,
-                      {
-                        color: isSelected ? currentTheme.colors.primary : currentTheme.colors.text,
-                        fontWeight: isSelected ? '700' : '600',
-                      },
-                    ]}
-                  >
-                    {m.profile?.name} {m.user_id === user?.id ? '(Me)' : ''}
-                  </Text>
+                  <View>
+                    <Text
+                      style={[
+                        styles.chipText,
+                        {
+                          color: isSelected ? currentTheme.colors.primary : currentTheme.colors.text,
+                          fontWeight: isSelected ? '700' : '600',
+                        },
+                      ]}
+                    >
+                      {m.name} {m.user_id === user?.id ? '(Me)' : ''}
+                    </Text>
+                    {m.job_title ? (
+                      <Text style={{ fontSize: 10, color: '#64748b' }}>{m.job_title}</Text>
+                    ) : null}
+                  </View>
                 </Pressable>
               );
             })}

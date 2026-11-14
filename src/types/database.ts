@@ -21,6 +21,8 @@ export interface Profile {
   username: string;
   email: string;
   picture?: string;
+  bio?: string;
+  job_title?: string;
   email_verified: boolean;
   created_at: string;
   isAdmin?: boolean;
@@ -56,6 +58,8 @@ export interface Task {
   status: TaskStatus;
   priority: TaskPriority;
   assigned_date: string; // Publish / assignment date e.g. "2026-11-11"
+  assigned_time?: string; // Automatically captured present assignment time e.g. "08:45 PM"
+  assigned_at?: string;  // Full ISO timestamp e.g. "2026-11-14T20:55:00.000Z"
   due_date: string;      // Submission deadline date e.g. "2026-11-15"
   start_time: string;
   end_time: string;

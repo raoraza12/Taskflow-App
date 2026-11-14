@@ -254,6 +254,42 @@ export default function DashboardScreen() {
         </TouchableOpacity>
       </Animated.View>
 
+      {/* 2.5 Prominent Team Discussion & Voice Channel Card */}
+      <Animated.View entering={FadeInDown.delay(90).duration(300)}>
+        <TouchableOpacity
+          style={styles.discussionBanner}
+          onPress={() => {
+            triggerHaptic('light');
+            router.push('/(tabs)/chat');
+          }}
+          activeOpacity={0.88}
+        >
+          <LinearGradient
+            colors={['#4338ca', '#6366f1']}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 0 }}
+            style={styles.discussionBannerGradient}
+          >
+            <View style={styles.discussionIconWrap}>
+              <Ionicons name="chatbubbles" size={22} color="#ffffff" />
+            </View>
+            <View style={{ flex: 1, marginHorizontal: 12 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                <Text style={styles.discussionBannerTitle}>Team Discussion & Voice Room</Text>
+                <View style={styles.livePulseDot} />
+              </View>
+              <Text style={styles.discussionBannerSub}>
+                Real-time sprint discussions, audio voice notes & @mentions
+              </Text>
+            </View>
+            <View style={styles.openChatBtnBadge}>
+              <Text style={styles.openChatBtnText}>Open</Text>
+              <Ionicons name="arrow-forward" size={13} color="#ffffff" />
+            </View>
+          </LinearGradient>
+        </TouchableOpacity>
+      </Animated.View>
+
       {/* 3. 2x2 Metric Cards (Spacious, Clean) */}
       <View style={styles.metricGrid}>
         <AnimatedMetricCard
@@ -538,6 +574,62 @@ const styles = StyleSheet.create({
   },
   actionSecondaryText: {
     fontSize: 12,
+    fontWeight: '700',
+  },
+
+  // 2.5 Discussion Banner
+  discussionBanner: {
+    borderRadius: Radius.lg,
+    overflow: 'hidden',
+    marginBottom: Spacing.md,
+    shadowColor: '#4f46e5',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.16,
+    shadowRadius: 10,
+    elevation: 3,
+  },
+  discussionBannerGradient: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: Spacing.sm + 4,
+  },
+  discussionIconWrap: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255, 255, 255, 0.18)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  discussionBannerTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#ffffff',
+  },
+  discussionBannerSub: {
+    fontSize: 11,
+    color: 'rgba(255, 255, 255, 0.85)',
+    marginTop: 2,
+    lineHeight: 15,
+  },
+  livePulseDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#34d399',
+  },
+  openChatBtnBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: 'rgba(255, 255, 255, 0.22)',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: Radius.full,
+  },
+  openChatBtnText: {
+    color: '#ffffff',
+    fontSize: 11,
     fontWeight: '700',
   },
 

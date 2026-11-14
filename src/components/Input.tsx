@@ -34,10 +34,6 @@ export const Input: React.FC<InputProps> = ({
   const isPasswordField = Boolean(secureTextEntry || isPassword);
   const [isSecure, setIsSecure] = useState<boolean>(isPasswordField);
 
-  useEffect(() => {
-    setIsSecure(Boolean(secureTextEntry || isPassword));
-  }, [secureTextEntry, isPassword]);
-
   let activeTheme = THEMES.snow;
   try {
     const app = useApp();
