@@ -858,8 +858,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return { ok: true };
   };
 
-  // Update profile (name, picture, unique username)
-  const updateProfile = async (patch: { name?: string; picture?: string; username?: string }) => {
+  // Update profile (name, picture, unique username, bio, job_title)
+  const updateProfile = async (patch: {
+    name?: string;
+    picture?: string;
+    username?: string;
+    bio?: string;
+    job_title?: string;
+  }) => {
     if (!user) return { ok: false, error: 'Not logged in' };
 
     let cleanedUsername = user.username;
@@ -1211,6 +1217,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const createTask = async (input: TaskInput) => {
     if (!user) return { ok: false, error: 'Must be logged in' };
     if (!input.title.trim()) return { ok: false, error: 'Task title is required' };
+
+    const taskId = `task_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+    const isPersonal = input.isPersonal !== undefined ? input.isPersonal : !input.teamId;
 
     const now = new Date();
     const hours = String(now.getHours()).padStart(2, '0');
