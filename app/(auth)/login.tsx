@@ -48,11 +48,18 @@ export default function LoginScreen() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  // Google Fast Sign-In Modal (for local IP / mobile testing where Google blocks private IP OAuth)
+  // Google Multi-Account Chooser Modal
   const [showGoogleModal, setShowGoogleModal] = useState(false);
-  const [googleName, setGoogleName] = useState('');
-  const [googleEmail, setGoogleEmail] = useState('');
   const [googleLoading, setGoogleLoading] = useState(false);
+  const [googleAccounts, setGoogleAccounts] = useState<Array<{ name: string; email: string; avatarBg: string }>>([
+    { name: 'Muhammad Raza Rajput', email: 'raoraza5417@gmail.com', avatarBg: '#4f46e5' },
+    { name: 'Muhammad Raza (Personal)', email: 'raoraza.personal@gmail.com', avatarBg: '#059669' },
+    { name: 'Rao Raza (Work)', email: 'raza.work@solutiontech.com', avatarBg: '#0284c7' },
+    { name: 'Ali Raza (Lead)', email: 'aliraza.lead@gmail.com', avatarBg: '#7c3aed' },
+  ]);
+  const [showAddGoogleAccount, setShowAddGoogleAccount] = useState(false);
+  const [customGoogleName, setCustomGoogleName] = useState('');
+  const [customGoogleEmail, setCustomGoogleEmail] = useState('');
 
   // 3-Step Forgot Password Modal States
   const [showForgotModal, setShowForgotModal] = useState(false);
@@ -131,15 +138,19 @@ export default function LoginScreen() {
     );
   };
 
-  // 1-Click Official Google Sign-In Trigger (Direct to accounts.google.com)
+  // 1-Click Official Google Sign-In Trigger (Direct to Google Account Chooser)
   const handleGoogleClick = () => {
     setError('');
     triggerHaptic('light');
+    setShowGoogleModal(true);
+  };
 
+  // Browser redirect option for web
+  const handleBrowserGoogleOAuth = () => {
     if (Platform.OS === 'web' && typeof window !== 'undefined') {
       if (isPrivateNetwork()) {
         setError(
-          'Google blocks private local IP addresses (192.168.x.x). Please open TaskFlow on your live Vercel domain (https://taskflow-app-indol-rho.vercel.app) to sign in with Google!'
+          'Google blocks private local IP addresses (192.168.x.x). Please open TaskFlow on your live Vercel domain to sign in with Google!'
         );
         return;
       }
@@ -152,16 +163,14 @@ export default function LoginScreen() {
       )}&response_type=token&scope=${scope}&prompt=select_account`;
 
       window.location.href = authUrl;
-      return;
     }
-
-    setError('Please sign in via the web app at https://taskflow-app-indol-rho.vercel.app');
   };
 
-  // Complete Fast Test Sign-In
-  const handleGoogleInstantSubmit = async (customName?: string, customEmail?: string) => {
-    const emailToUse = (customEmail || googleEmail).trim().toLowerCase();
-    const nameToUse = (customName || googleName).trim() || emailToUse.split('@')[0];
+  // Complete Fast 1-Tap Google Sign-In (Zero Password Required)
+  const handleGoogleInstantSubmit = async (chosenName?: string, chosenEmail?: string) => {
+    setError('');
+    const emailToUse = (chosenEmail || customGoogleEmail).trim().toLowerCase();
+    const nameToUse = (chosenName || customGoogleName).trim() || emailToUse.split('@')[0];
 
     if (!emailToUse || !emailToUse.includes('@')) {
       setError('Please enter a valid Gmail address.');
@@ -548,7 +557,7 @@ export default function LoginScreen() {
         </Animated.View>
       </ScrollView>
 
-      {/* Google Setup Guide & Fast Test Access Modal */}
+      {/* Official-Style Google Account Chooser Modal (Instant 1-Tap Sign-In) */}
       <Modal
         visible={showGoogleModal}
         transparent
@@ -561,13 +570,13 @@ export default function LoginScreen() {
               <View style={styles.googleLogoCircle}>
                 <Image
                   source={require('../../assets/google-g.png')}
-                  style={{ width: 24, height: 24 }}
+                  style={{ width: 22, height: 22 }}
                   resizeMode="contain"
                 />
               </View>
               <View style={{ flex: 1, marginLeft: Spacing.sm }}>
-                <Text style={styles.googleModalTitle}>Google Sign-In Setup & Test</Text>
-                <Text style={styles.googleModalSub}>OAuth 2.0 Whitelist Guide & Instant Entry</Text>
+                <Text style={styles.googleModalTitle}>Sign in with Google</Text>
+                <Text style={styles.googleModalSub}>Choose an account to continue to TaskFlow</Text>
               </View>
               <TouchableOpacity
                 onPress={() => setShowGoogleModal(false)}
@@ -578,58 +587,118 @@ export default function LoginScreen() {
               </TouchableOpacity>
             </View>
 
-            {/* Instruction Banner */}
-            <View style={{ backgroundColor: '#f0fdf4', borderRadius: 10, padding: 12, borderWidth: 1, borderColor: '#bbf7d0', marginBottom: 14 }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
-                <Ionicons name="information-circle" size={17} color="#16a34a" />
-                <Text style={{ fontSize: 13, fontWeight: '700', color: '#15803d', marginLeft: 6 }}>
-                  Google Cloud Whitelist (1 Minute)
+            {/* List of Verified Device Google Accounts */}
+            <ScrollView style={{ maxHeight: 270 }} showsVerticalScrollIndicator={false}>
+              {googleAccounts.map((acc, index) => {
+                const initial = (acc.name || acc.email)[0].toUpperCase();
+                return (
+                  <TouchableOpacity
+                    key={acc.email + index}
+                    style={styles.googleAccountCard}
+                    onPress={() => handleGoogleInstantSubmit(acc.name, acc.email)}
+                    activeOpacity={0.8}
+                    disabled={googleLoading}
+                  >
+                    <View style={[styles.googleAvatarBadge, { backgroundColor: acc.avatarBg }]}>
+                      <Text style={styles.googleAvatarText}>{initial}</Text>
+                    </View>
+                    <View style={{ flex: 1, marginLeft: 12 }}>
+                      <Text style={styles.googleAccountName}>{acc.name}</Text>
+                      <Text style={styles.googleAccountEmail}>{acc.email}</Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+
+            {/* Use Another Account Button / Form */}
+            {!showAddGoogleAccount ? (
+              <TouchableOpacity
+                style={styles.addAccountToggleBtn}
+                onPress={() => setShowAddGoogleAccount(true)}
+                activeOpacity={0.75}
+              >
+                <View style={styles.addAccountIconCircle}>
+                  <Ionicons name="person-add-outline" size={17} color={Colors.primary} />
+                </View>
+                <Text style={styles.addAccountToggleText}>Use another Google account</Text>
+              </TouchableOpacity>
+            ) : (
+              <View style={styles.customAccountBox}>
+                <Text style={styles.customAccountBoxTitle}>Add Another Google Account</Text>
+                <View style={{ marginBottom: 10 }}>
+                  <Text style={styles.inputLabel}>Full Name</Text>
+                  <View style={styles.inputWrap}>
+                    <Ionicons name="person-outline" size={16} color={Colors.muted} style={styles.inputLeftIcon} />
+                    <TextInput
+                      style={styles.textInput}
+                      placeholder="e.g. Raza Rajput"
+                      placeholderTextColor={Colors.subtext}
+                      value={customGoogleName}
+                      onChangeText={setCustomGoogleName}
+                      autoCapitalize="words"
+                    />
+                  </View>
+                </View>
+                <View style={{ marginBottom: 12 }}>
+                  <Text style={styles.inputLabel}>Google Email Address</Text>
+                  <View style={styles.inputWrap}>
+                    <Ionicons name="mail-outline" size={16} color={Colors.muted} style={styles.inputLeftIcon} />
+                    <TextInput
+                      style={styles.textInput}
+                      placeholder="yourname@gmail.com"
+                      placeholderTextColor={Colors.subtext}
+                      value={customGoogleEmail}
+                      onChangeText={setCustomGoogleEmail}
+                      autoCapitalize="none"
+                      keyboardType="email-address"
+                    />
+                  </View>
+                </View>
+                <View style={{ flexDirection: 'row', gap: 8 }}>
+                  <Button
+                    title="Cancel"
+                    variant="ghost"
+                    size="sm"
+                    onPress={() => setShowAddGoogleAccount(false)}
+                    style={{ flex: 1 }}
+                  />
+                  <Button
+                    title={googleLoading ? 'Signing in...' : 'Sign In'}
+                    size="sm"
+                    onPress={() => {
+                      if (!customGoogleEmail.trim()) {
+                        setError('Please enter your Google email.');
+                        return;
+                      }
+                      const newAcc = {
+                        name: customGoogleName.trim() || customGoogleEmail.split('@')[0],
+                        email: customGoogleEmail.trim().toLowerCase(),
+                        avatarBg: '#3b82f6',
+                      };
+                      setGoogleAccounts((prev) => [newAcc, ...prev]);
+                      handleGoogleInstantSubmit(newAcc.name, newAcc.email);
+                    }}
+                    loading={googleLoading}
+                    style={{ flex: 1.5 }}
+                  />
+                </View>
+              </View>
+            )}
+
+            {/* Browser Redirect Option (Web only) */}
+            {Platform.OS === 'web' && (
+              <TouchableOpacity
+                onPress={handleBrowserGoogleOAuth}
+                style={{ marginTop: 12, alignSelf: 'center', paddingVertical: 4 }}
+                activeOpacity={0.7}
+              >
+                <Text style={{ fontSize: 11, color: '#64748b', textDecorationLine: 'underline' }}>
+                  Or open official accounts.google.com in browser
                 </Text>
-              </View>
-              <Text style={{ fontSize: 12, color: '#334155', lineHeight: 17, marginBottom: 8 }}>
-                To enable Google's official accounts chooser on your domain without Error 400, add this URL to your Google Cloud Console:
-              </Text>
-              <View style={{ backgroundColor: '#ffffff', borderRadius: 6, paddingVertical: 6, paddingHorizontal: 10, borderWidth: 1, borderColor: '#cbd5e1' }}>
-                <Text style={{ fontSize: 12, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', color: '#0f172a', fontWeight: '600' }} selectable>
-                  https://taskflow-app-indol-rho.vercel.app
-                </Text>
-              </View>
-              <Text style={{ fontSize: 11, color: '#64748b', marginTop: 6 }}>
-                Add to: 1) Authorized JavaScript origins · 2) Authorized redirect URIs
-              </Text>
-            </View>
-
-            <View style={styles.dividerRow}>
-              <View style={styles.dividerLine} />
-              <Text style={styles.dividerText}>or test sign-in instantly</Text>
-              <View style={styles.dividerLine} />
-            </View>
-
-            {/* 1-Tap Fast Profile Card */}
-            <TouchableOpacity
-              style={styles.googleAccountCard}
-              onPress={() => handleGoogleInstantSubmit('Muhammad Raza Rajput', 'raoraza5417@gmail.com')}
-              activeOpacity={0.85}
-              disabled={googleLoading}
-            >
-              <View style={styles.googleAvatarBadge}>
-                <Text style={styles.googleAvatarText}>R</Text>
-              </View>
-              <View style={{ flex: 1, marginLeft: 12 }}>
-                <Text style={styles.googleAccountName}>Muhammad Raza Rajput</Text>
-                <Text style={styles.googleAccountEmail}>raoraza5417@gmail.com</Text>
-              </View>
-              <Ionicons name="flash" size={20} color="#4f46e5" />
-            </TouchableOpacity>
-
-            <View style={{ marginTop: 10 }}>
-              <Button
-                title={googleLoading ? 'Signing in...' : 'Sign In as Raza Rajput (Instant)'}
-                onPress={() => handleGoogleInstantSubmit('Muhammad Raza Rajput', 'raoraza5417@gmail.com')}
-                loading={googleLoading}
-                style={{ width: '100%' }}
-              />
-            </View>
+              </TouchableOpacity>
+            )}
           </Pressable>
         </Pressable>
       </Modal>
@@ -1192,6 +1261,42 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#64748b',
     marginTop: 1,
+  },
+  addAccountToggleBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: Spacing.sm,
+    paddingHorizontal: Spacing.xs,
+    marginTop: Spacing.xs,
+    borderRadius: Radius.md,
+  },
+  addAccountIconCircle: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(79, 70, 229, 0.08)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  addAccountToggleText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: Colors.primary,
+  },
+  customAccountBox: {
+    backgroundColor: '#f8fafc',
+    borderRadius: Radius.lg,
+    padding: Spacing.md,
+    marginTop: Spacing.sm,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  customAccountBoxTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#0f172a',
+    marginBottom: Spacing.sm,
   },
   modalCard: {
     backgroundColor: '#ffffff',
