@@ -22,6 +22,12 @@ import { useRouter } from 'expo-router';
 import { CONFIG } from '../../src/constants/config';
 import { triggerHaptic } from '../../src/lib/haptics';
 import { fetchGoogleProfileWithToken } from '../../src/lib/googleAuth';
+import * as WebBrowser from 'expo-web-browser';
+import * as AuthSession from 'expo-auth-session';
+
+if (Platform.OS !== 'web') {
+  WebBrowser.maybeCompleteAuthSession();
+}
 
 export default function LoginScreen() {
   const {
@@ -47,19 +53,6 @@ export default function LoginScreen() {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-
-  // Google Multi-Account Chooser Modal
-  const [showGoogleModal, setShowGoogleModal] = useState(false);
-  const [googleLoading, setGoogleLoading] = useState(false);
-  const [googleAccounts, setGoogleAccounts] = useState<Array<{ name: string; email: string; avatarBg: string }>>([
-    { name: 'Muhammad Raza Rajput', email: 'raoraza5417@gmail.com', avatarBg: '#4f46e5' },
-    { name: 'Muhammad Raza (Personal)', email: 'raoraza.personal@gmail.com', avatarBg: '#059669' },
-    { name: 'Rao Raza (Work)', email: 'raza.work@solutiontech.com', avatarBg: '#0284c7' },
-    { name: 'Ali Raza (Lead)', email: 'aliraza.lead@gmail.com', avatarBg: '#7c3aed' },
-  ]);
-  const [showAddGoogleAccount, setShowAddGoogleAccount] = useState(false);
-  const [customGoogleName, setCustomGoogleName] = useState('');
-  const [customGoogleEmail, setCustomGoogleEmail] = useState('');
 
   // 3-Step Forgot Password Modal States
   const [showForgotModal, setShowForgotModal] = useState(false);
@@ -122,12 +115,19 @@ export default function LoginScreen() {
             setError(err?.message || 'Failed to authenticate with Google');
           });
       }
+    } else if (hash && hash.includes('error=')) {
+      const params = new URLSearchParams(hash.substring(1));
+      const errParam = params.get('error_description') || params.get('error');
+      window.history.replaceState(null, '', window.location.pathname);
+      if (errParam && !errParam.includes('immediate_failed')) {
+        setError(`Google sign-in was canceled (${errParam})`);
+      }
     }
   }, []);
 
   // Check if current host is private network IP (where Google rejects response_type=token)
   const isPrivateNetwork = () => {
-    if (Platform.OS !== 'web' || typeof window === 'undefined') return true;
+    if (Platform.OS !== 'web' || typeof window === 'undefined') return false;
     const host = window.location.hostname;
     return (
       host.startsWith('192.168.') ||
@@ -138,19 +138,15 @@ export default function LoginScreen() {
     );
   };
 
-  // 1-Click Official Google Sign-In Trigger (Direct to Google Account Chooser)
-  const handleGoogleClick = () => {
+  // Official Google Sign-In with Account Chooser (prompts accounts.google.com to pick logged-in account)
+  const handleGoogleClick = async () => {
     setError('');
     triggerHaptic('light');
-    setShowGoogleModal(true);
-  };
 
-  // Browser redirect option for web
-  const handleBrowserGoogleOAuth = () => {
     if (Platform.OS === 'web' && typeof window !== 'undefined') {
       if (isPrivateNetwork()) {
         setError(
-          'Google blocks private local IP addresses (192.168.x.x). Please open TaskFlow on your live Vercel domain to sign in with Google!'
+          'Google blocks private local IP addresses (192.168.x.x). Please open TaskFlow on your live Vercel domain (https://taskflow-app-indol-rho.vercel.app) to sign in with Google, or sign in below with email & password!'
         );
         return;
       }
@@ -163,36 +159,43 @@ export default function LoginScreen() {
       )}&response_type=token&scope=${scope}&prompt=select_account`;
 
       window.location.href = authUrl;
-    }
-  };
-
-  // Complete Fast 1-Tap Google Sign-In (Zero Password Required)
-  const handleGoogleInstantSubmit = async (chosenName?: string, chosenEmail?: string) => {
-    setError('');
-    const emailToUse = (chosenEmail || customGoogleEmail).trim().toLowerCase();
-    const nameToUse = (chosenName || customGoogleName).trim() || emailToUse.split('@')[0];
-
-    if (!emailToUse || !emailToUse.includes('@')) {
-      setError('Please enter a valid Gmail address.');
       return;
     }
 
-    setGoogleLoading(true);
+    // Native Mobile (Android APK / iOS)
     try {
-      const res = await loginWithGoogle({
-        name: nameToUse,
-        email: emailToUse,
+      setLoading(true);
+      const redirectUri = AuthSession.makeRedirectUri({
+        scheme: 'taskflow',
       });
-      if (res.ok) {
-        triggerHaptic('success');
-        setShowGoogleModal(false);
-        router.replace('/(tabs)');
-      } else {
-        triggerHaptic('error');
-        setError(res.error || 'Google login failed');
+      const scope = encodeURIComponent('openid email profile');
+      const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${CONFIG.GOOGLE_CLIENT_ID}&redirect_uri=${encodeURIComponent(
+        redirectUri
+      )}&response_type=token&scope=${scope}&prompt=select_account`;
+
+      const result = await WebBrowser.openAuthSessionAsync(authUrl, redirectUri);
+      if (result.type === 'success' && result.url) {
+        const hashIndex = result.url.indexOf('#');
+        const fragment = hashIndex !== -1 ? result.url.substring(hashIndex + 1) : '';
+        const params = new URLSearchParams(fragment);
+        const accessToken = params.get('access_token');
+        if (accessToken) {
+          const profile = await fetchGoogleProfileWithToken(accessToken);
+          const res = await loginWithGoogle({
+            email: profile.email,
+            name: profile.name,
+            picture: profile.picture,
+            google_id: profile.googleId,
+          });
+          if (!res.ok) {
+            setError(res.error || 'Google login failed');
+          }
+        }
       }
+    } catch (err: any) {
+      setError(err?.message || 'Could not open Google Sign-In');
     } finally {
-      setGoogleLoading(false);
+      setLoading(false);
     }
   };
 
@@ -362,10 +365,17 @@ export default function LoginScreen() {
                 />
               </View>
               <Text style={styles.googleHeroBtnText}>
-                {loading ? 'Opening Google...' : 'Continue with Google'}
+                {loading ? 'Opening Google Account Chooser...' : 'Continue with Google'}
               </Text>
               <View style={styles.googleIconPlaceholder} />
             </TouchableOpacity>
+
+            <View style={styles.googleSecurityNotice}>
+              <Ionicons name="shield-checkmark" size={13} color="#059669" />
+              <Text style={styles.googleSecurityText}>
+                Official Google Account Chooser (accounts.google.com)
+              </Text>
+            </View>
 
             {/* Subtle Divider */}
             <View style={styles.dividerRow}>
@@ -556,152 +566,6 @@ export default function LoginScreen() {
           </View>
         </Animated.View>
       </ScrollView>
-
-      {/* Official-Style Google Account Chooser Modal (Instant 1-Tap Sign-In) */}
-      <Modal
-        visible={showGoogleModal}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setShowGoogleModal(false)}
-      >
-        <Pressable style={styles.modalBackdrop} onPress={() => setShowGoogleModal(false)}>
-          <Pressable style={styles.googleModalCard} onPress={(e) => e.stopPropagation()}>
-            <View style={styles.googleModalHeader}>
-              <View style={styles.googleLogoCircle}>
-                <Image
-                  source={require('../../assets/google-g.png')}
-                  style={{ width: 22, height: 22 }}
-                  resizeMode="contain"
-                />
-              </View>
-              <View style={{ flex: 1, marginLeft: Spacing.sm }}>
-                <Text style={styles.googleModalTitle}>Sign in with Google</Text>
-                <Text style={styles.googleModalSub}>Choose an account to continue to TaskFlow</Text>
-              </View>
-              <TouchableOpacity
-                onPress={() => setShowGoogleModal(false)}
-                style={styles.closeBtn}
-                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-              >
-                <Ionicons name="close" size={20} color={Colors.subtext} />
-              </TouchableOpacity>
-            </View>
-
-            {/* List of Verified Device Google Accounts */}
-            <ScrollView style={{ maxHeight: 270 }} showsVerticalScrollIndicator={false}>
-              {googleAccounts.map((acc, index) => {
-                const initial = (acc.name || acc.email)[0].toUpperCase();
-                return (
-                  <TouchableOpacity
-                    key={acc.email + index}
-                    style={styles.googleAccountCard}
-                    onPress={() => handleGoogleInstantSubmit(acc.name, acc.email)}
-                    activeOpacity={0.8}
-                    disabled={googleLoading}
-                  >
-                    <View style={[styles.googleAvatarBadge, { backgroundColor: acc.avatarBg }]}>
-                      <Text style={styles.googleAvatarText}>{initial}</Text>
-                    </View>
-                    <View style={{ flex: 1, marginLeft: 12 }}>
-                      <Text style={styles.googleAccountName}>{acc.name}</Text>
-                      <Text style={styles.googleAccountEmail}>{acc.email}</Text>
-                    </View>
-                    <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
-                  </TouchableOpacity>
-                );
-              })}
-            </ScrollView>
-
-            {/* Use Another Account Button / Form */}
-            {!showAddGoogleAccount ? (
-              <TouchableOpacity
-                style={styles.addAccountToggleBtn}
-                onPress={() => setShowAddGoogleAccount(true)}
-                activeOpacity={0.75}
-              >
-                <View style={styles.addAccountIconCircle}>
-                  <Ionicons name="person-add-outline" size={17} color={Colors.primary} />
-                </View>
-                <Text style={styles.addAccountToggleText}>Use another Google account</Text>
-              </TouchableOpacity>
-            ) : (
-              <View style={styles.customAccountBox}>
-                <Text style={styles.customAccountBoxTitle}>Add Another Google Account</Text>
-                <View style={{ marginBottom: 10 }}>
-                  <Text style={styles.inputLabel}>Full Name</Text>
-                  <View style={styles.inputWrap}>
-                    <Ionicons name="person-outline" size={16} color={Colors.muted} style={styles.inputLeftIcon} />
-                    <TextInput
-                      style={styles.textInput}
-                      placeholder="e.g. Raza Rajput"
-                      placeholderTextColor={Colors.subtext}
-                      value={customGoogleName}
-                      onChangeText={setCustomGoogleName}
-                      autoCapitalize="words"
-                    />
-                  </View>
-                </View>
-                <View style={{ marginBottom: 12 }}>
-                  <Text style={styles.inputLabel}>Google Email Address</Text>
-                  <View style={styles.inputWrap}>
-                    <Ionicons name="mail-outline" size={16} color={Colors.muted} style={styles.inputLeftIcon} />
-                    <TextInput
-                      style={styles.textInput}
-                      placeholder="yourname@gmail.com"
-                      placeholderTextColor={Colors.subtext}
-                      value={customGoogleEmail}
-                      onChangeText={setCustomGoogleEmail}
-                      autoCapitalize="none"
-                      keyboardType="email-address"
-                    />
-                  </View>
-                </View>
-                <View style={{ flexDirection: 'row', gap: 8 }}>
-                  <Button
-                    title="Cancel"
-                    variant="ghost"
-                    size="sm"
-                    onPress={() => setShowAddGoogleAccount(false)}
-                    style={{ flex: 1 }}
-                  />
-                  <Button
-                    title={googleLoading ? 'Signing in...' : 'Sign In'}
-                    size="sm"
-                    onPress={() => {
-                      if (!customGoogleEmail.trim()) {
-                        setError('Please enter your Google email.');
-                        return;
-                      }
-                      const newAcc = {
-                        name: customGoogleName.trim() || customGoogleEmail.split('@')[0],
-                        email: customGoogleEmail.trim().toLowerCase(),
-                        avatarBg: '#3b82f6',
-                      };
-                      setGoogleAccounts((prev) => [newAcc, ...prev]);
-                      handleGoogleInstantSubmit(newAcc.name, newAcc.email);
-                    }}
-                    loading={googleLoading}
-                    style={{ flex: 1.5 }}
-                  />
-                </View>
-              </View>
-            )}
-
-            {/* Browser Redirect Option (Web only) */}
-            {Platform.OS === 'web' && (
-              <TouchableOpacity
-                onPress={handleBrowserGoogleOAuth}
-                style={{ marginTop: 12, alignSelf: 'center', paddingVertical: 4 }}
-                activeOpacity={0.7}
-              >
-                <Text style={{ fontSize: 11, color: '#64748b', textDecorationLine: 'underline' }}>
-                  Or open official accounts.google.com in browser
-                </Text>
-              </TouchableOpacity>
-            )}
-          </Pressable>
-        </Pressable>
-      </Modal>
 
       {/* 3-Step Password Reset OTP Modal */}
       <Modal
@@ -1012,6 +876,23 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#3c4043',
     letterSpacing: 0.2,
+  },
+  googleSecurityNotice: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    marginTop: 8,
+    backgroundColor: 'rgba(5, 150, 105, 0.08)',
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    borderRadius: Radius.full,
+    alignSelf: 'center',
+  },
+  googleSecurityText: {
+    fontSize: 11,
+    color: '#059669',
+    fontWeight: '600',
   },
   googleFastHint: {
     fontSize: 11,
