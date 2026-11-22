@@ -16,6 +16,16 @@ export default function Index() {
       const params = new URLSearchParams(hash.substring(1));
       const accessToken = params.get('access_token');
       if (accessToken) {
+        // If this window was opened as a Google OAuth popup by the login page
+        if (window.opener) {
+          try {
+            window.opener.postMessage({ type: 'GOOGLE_AUTH_TOKEN', accessToken }, '*');
+            window.close();
+            return;
+          } catch (e) {
+            console.error('Failed to postMessage to opener:', e);
+          }
+        }
         window.history.replaceState(null, '', window.location.pathname);
         setProcessingToken(true);
         fetchGoogleProfileWithToken(accessToken)

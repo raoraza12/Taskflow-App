@@ -34,6 +34,10 @@ export const Input: React.FC<InputProps> = ({
   const isPasswordField = Boolean(secureTextEntry || isPassword);
   const [isSecure, setIsSecure] = useState<boolean>(isPasswordField);
 
+  useEffect(() => {
+    setIsSecure(isPasswordField);
+  }, [isPasswordField]);
+
   let activeTheme = THEMES.snow;
   try {
     const app = useApp();
@@ -48,6 +52,7 @@ export const Input: React.FC<InputProps> = ({
       <View style={styles.inputWrapper}>
         <TextInput
           placeholderTextColor={activeTheme.colors.subtext}
+          {...props}
           secureTextEntry={isPasswordField ? isSecure : false}
           style={[
             styles.input,
@@ -62,7 +67,6 @@ export const Input: React.FC<InputProps> = ({
             props.multiline ? styles.multiline : null,
             inputStyle,
           ]}
-          {...props}
         />
         {isPasswordField && (
           <TouchableOpacity
@@ -76,7 +80,7 @@ export const Input: React.FC<InputProps> = ({
             <Ionicons
               name={isSecure ? 'eye-outline' : 'eye-off-outline'}
               size={20}
-              color={activeTheme.colors.subtext}
+              color={activeTheme.colors.primary}
             />
           </TouchableOpacity>
         )}

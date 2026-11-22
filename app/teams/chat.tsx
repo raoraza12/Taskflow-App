@@ -33,9 +33,18 @@ export default function TeamChatScreen() {
   const params = useLocalSearchParams<{ teamId?: string }>();
   const { user, users, teams, chatMessages, sendChatMessage } = useApp();
 
-  // Active Team (from query param or first available team)
-  const activeTeam = teams.find((t) => t.id === params.teamId) || teams[0];
+  // Active Team selection (supports switching between multiple teams)
+  const [selectedTeamId, setSelectedTeamId] = useState<string>(params.teamId || teams[0]?.id || '');
+  const activeTeam = teams.find((t) => t.id === selectedTeamId) || teams[0];
   const teamMessages = chatMessages.filter((m) => m.team_id === activeTeam?.id);
+
+  useEffect(() => {
+    if (params.teamId) {
+      setSelectedTeamId(params.teamId);
+    } else if (!selectedTeamId && teams.length > 0) {
+      setSelectedTeamId(teams[0].id);
+    }
+  }, [params.teamId, teams]);
 
   const [inputText, setInputText] = useState('');
   const [showMentionPopup, setShowMentionPopup] = useState(false);
@@ -304,6 +313,26 @@ export default function TeamChatScreen() {
         </TouchableOpacity>
       </View>
 
+      {/* Multiple Teams Quick Switcher */}
+      {teams.length > 1 && (
+        <View style={styles.teamsBar}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.teamsBarContent}>
+            {teams.map((t) => (
+              <TouchableOpacity
+                key={t.id}
+                style={[styles.teamChip, t.id === activeTeam?.id && styles.teamChipActive]}
+                onPress={() => setSelectedTeamId(t.id)}
+                activeOpacity={0.8}
+              >
+                <Text style={[styles.teamChipText, t.id === activeTeam?.id && styles.teamChipTextActive]}>
+                  {t.name}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        </View>
+      )}
+
       {/* Messages Thread */}
       <ScrollView
         ref={scrollViewRef}
@@ -318,7 +347,35 @@ export default function TeamChatScreen() {
           </Text>
         </View>
 
-        {teamMessages.map((msg) => {
+        {!activeTeam ? (
+          <View style={styles.emptyStateBox}>
+            <View style={styles.emptyIconWrap}>
+              <Ionicons name="people-outline" size={38} color="#4f46e5" />
+            </View>
+            <Text style={styles.emptyStateTitle}>No Active Team Workspace</Text>
+            <Text style={styles.emptyStateSub}>
+              Create or join a team workspace to start live discussions, voice notes, and sprint collaboration.
+            </Text>
+            <TouchableOpacity
+              style={styles.emptyActionBtn}
+              onPress={() => router.push('/(tabs)/teams')}
+              activeOpacity={0.85}
+            >
+              <Text style={styles.emptyActionBtnText}>+ Create or Join Team</Text>
+            </TouchableOpacity>
+          </View>
+        ) : teamMessages.length === 0 ? (
+          <View style={styles.emptyThreadBox}>
+            <View style={styles.emptyThreadIconWrap}>
+              <Ionicons name="chatbubbles-outline" size={34} color="#6366f1" />
+            </View>
+            <Text style={styles.emptyThreadTitle}>Welcome to {activeTeam.name} Discussion!</Text>
+            <Text style={styles.emptyThreadSub}>
+              No messages yet in this team channel. Send a quick update or record a voice note below.
+            </Text>
+          </View>
+        ) : (
+          teamMessages.map((msg) => {
           const isMe = msg.user_id === user?.id;
           const isVoice = msg.type === 'voice';
           const isPlayingThis = playingMsgId === msg.id;
@@ -416,7 +473,8 @@ export default function TeamChatScreen() {
               </View>
             </Animated.View>
           );
-        })}
+        })
+      )}
       </ScrollView>
 
       {/* Floating @ Mention Autocomplete Popup */}
@@ -903,5 +961,112 @@ const styles = StyleSheet.create({
     borderRadius: 19,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  teamsBar: {
+    backgroundColor: '#ffffff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9',
+    paddingVertical: 6,
+  },
+  teamsBarContent: {
+    paddingHorizontal: 12,
+    gap: 8,
+  },
+  teamChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 14,
+    backgroundColor: '#f1f5f9',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  teamChipActive: {
+    backgroundColor: 'rgba(79, 70, 229, 0.1)',
+    borderColor: '#4f46e5',
+  },
+  teamChipText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#64748b',
+  },
+  teamChipTextActive: {
+    color: '#4f46e5',
+    fontWeight: '700',
+  },
+  emptyStateBox: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 48,
+    paddingHorizontal: 24,
+    marginVertical: 20,
+    backgroundColor: '#ffffff',
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderStyle: 'dashed',
+  },
+  emptyIconWrap: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: 'rgba(79, 70, 229, 0.08)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 14,
+  },
+  emptyStateTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#0f172a',
+    marginBottom: 6,
+    textAlign: 'center',
+  },
+  emptyStateSub: {
+    fontSize: 13,
+    color: '#64748b',
+    textAlign: 'center',
+    lineHeight: 19,
+    marginBottom: 18,
+    maxWidth: 280,
+  },
+  emptyActionBtn: {
+    backgroundColor: '#4f46e5',
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    borderRadius: 12,
+  },
+  emptyActionBtnText: {
+    color: '#ffffff',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  emptyThreadBox: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 40,
+    paddingHorizontal: 24,
+  },
+  emptyThreadIconWrap: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: 'rgba(99, 102, 241, 0.08)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 12,
+  },
+  emptyThreadTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#1e293b',
+    marginBottom: 4,
+    textAlign: 'center',
+  },
+  emptyThreadSub: {
+    fontSize: 12.5,
+    color: '#64748b',
+    textAlign: 'center',
+    maxWidth: 280,
+    lineHeight: 18,
   },
 });

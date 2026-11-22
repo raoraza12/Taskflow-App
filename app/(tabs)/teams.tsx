@@ -490,7 +490,7 @@ export default function TeamsScreen() {
               placeholder="Enter secure secret passphrase..."
               value={newTeamPass}
               onChangeText={setNewTeamPass}
-              secureTextEntry
+              isPassword
             />
 
             {error ? (
@@ -557,7 +557,7 @@ export default function TeamsScreen() {
               placeholder="Enter team secret passphrase..."
               value={joinPass}
               onChangeText={setJoinPass}
-              secureTextEntry
+              isPassword
             />
 
             {error ? (

@@ -21,7 +21,12 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { CONFIG } from '../../src/constants/config';
 import { triggerHaptic } from '../../src/lib/haptics';
-import { fetchGoogleProfileWithToken } from '../../src/lib/googleAuth';
+import {
+  fetchGoogleProfileWithToken,
+  openGoogleOAuthPopup,
+  loadGoogleScript,
+  parseGoogleCredential,
+} from '../../src/lib/googleAuth';
 import * as WebBrowser from 'expo-web-browser';
 import * as AuthSession from 'expo-auth-session';
 
@@ -125,6 +130,48 @@ export default function LoginScreen() {
     }
   }, []);
 
+  // Google Identity Services (GSI) One-Tap Prompt (Web Only)
+  useEffect(() => {
+    if (Platform.OS !== 'web' || typeof window === 'undefined') return;
+    loadGoogleScript()
+      .then(() => {
+        if (window.google?.accounts?.id && !user) {
+          try {
+            window.google.accounts.id.initialize({
+              client_id: CONFIG.GOOGLE_CLIENT_ID,
+              callback: async (response: any) => {
+                if (response?.credential) {
+                  try {
+                    setLoading(true);
+                    const profile = parseGoogleCredential(response.credential);
+                    const res = await loginWithGoogle({
+                      email: profile.email,
+                      name: profile.name,
+                      picture: profile.picture,
+                      google_id: profile.googleId,
+                    });
+                    setLoading(false);
+                    if (!res.ok) {
+                      setError(res.error || 'Google login failed');
+                    }
+                  } catch (err: any) {
+                    setLoading(false);
+                    setError(err?.message || 'Failed to authenticate Google credential');
+                  }
+                }
+              },
+              auto_select: false,
+              cancel_on_tap_outside: true,
+            });
+            window.google.accounts.id.prompt();
+          } catch (e) {
+            console.log('Google One Tap notice:', e);
+          }
+        }
+      })
+      .catch(() => {});
+  }, [user]);
+
   // Check if current host is private network IP (where Google rejects response_type=token)
   const isPrivateNetwork = () => {
     if (Platform.OS !== 'web' || typeof window === 'undefined') return false;
@@ -158,16 +205,54 @@ export default function LoginScreen() {
         redirectUri
       )}&response_type=token&scope=${scope}&prompt=select_account`;
 
-      window.location.href = authUrl;
+      // 1. Listen for message from popup
+      const handlePopupMessage = async (event: MessageEvent) => {
+        if (event.data?.type === 'GOOGLE_AUTH_TOKEN' && event.data.accessToken) {
+          window.removeEventListener('message', handlePopupMessage);
+          try {
+            const profile = await fetchGoogleProfileWithToken(event.data.accessToken);
+            const res = await loginWithGoogle({
+              email: profile.email,
+              name: profile.name,
+              picture: profile.picture,
+              google_id: profile.googleId,
+            });
+            setLoading(false);
+            if (!res.ok) {
+              setError(res.error || 'Google login failed');
+            }
+          } catch (err: any) {
+            setLoading(false);
+            setError(err?.message || 'Failed to authenticate with Google');
+          }
+        }
+      };
+      window.addEventListener('message', handlePopupMessage);
+
+      // 2. Open centered popup window
+      const popup = openGoogleOAuthPopup(CONFIG.GOOGLE_CLIENT_ID);
+      if (!popup || popup.closed || typeof popup.closed === 'undefined') {
+        // Fallback: If popup is blocked by browser, perform full page redirect
+        window.location.href = authUrl;
+        return;
+      }
+
+      // Check if popup was closed by user
+      const popupTimer = setInterval(() => {
+        if (popup.closed) {
+          clearInterval(popupTimer);
+          window.removeEventListener('message', handlePopupMessage);
+          setLoading(false);
+        }
+      }, 1000);
+
       return;
     }
 
     // Native Mobile (Android APK / iOS)
     try {
       setLoading(true);
-      const redirectUri = AuthSession.makeRedirectUri({
-        scheme: 'taskflow',
-      });
+      const redirectUri = 'https://taskflow-app-indol-rho.vercel.app';
       const scope = encodeURIComponent('openid email profile');
       const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${CONFIG.GOOGLE_CLIENT_ID}&redirect_uri=${encodeURIComponent(
         redirectUri
@@ -370,12 +455,6 @@ export default function LoginScreen() {
               <View style={styles.googleIconPlaceholder} />
             </TouchableOpacity>
 
-            <View style={styles.googleSecurityNotice}>
-              <Ionicons name="shield-checkmark" size={13} color="#059669" />
-              <Text style={styles.googleSecurityText}>
-                Official Google Account Chooser (accounts.google.com)
-              </Text>
-            </View>
 
             {/* Subtle Divider */}
             <View style={styles.dividerRow}>
