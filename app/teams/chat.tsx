@@ -27,11 +27,12 @@ import { useRouter, useLocalSearchParams } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { ChatMessage } from '../../src/types/database';
 import { voiceRecorder, VoicePlayerService } from '../../src/lib/audioVoiceRecorder';
+import { triggerHaptic } from '../../src/lib/haptics';
 
 export default function TeamChatScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{ teamId?: string }>();
-  const { user, users, teams, chatMessages, sendChatMessage } = useApp();
+  const { user, users, teams, chatMessages, sendChatMessage, openAIAssistant } = useApp();
 
   // Active Team selection (supports switching between multiple teams)
   const [selectedTeamId, setSelectedTeamId] = useState<string>(params.teamId || teams[0]?.id || '');
@@ -304,13 +305,28 @@ export default function TeamChatScreen() {
           </View>
         </View>
 
-        <TouchableOpacity
-          style={styles.headerActionBtn}
-          onPress={() => router.push('/(tabs)/teams')}
-          activeOpacity={0.7}
-        >
-          <Ionicons name="people-outline" size={20} color="#4f46e5" />
-        </TouchableOpacity>
+        <View style={styles.headerRightActions}>
+          <TouchableOpacity
+            style={styles.headerActionBtn}
+            onPress={() => {
+              triggerHaptic('light');
+              openAIAssistant();
+            }}
+            activeOpacity={0.7}
+            accessibilityLabel="Open TaskFlow AI Assistant"
+          >
+            <Ionicons name="sparkles" size={17} color="#4f46e5" />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.headerActionBtn}
+            onPress={() => router.push('/(tabs)/teams')}
+            activeOpacity={0.7}
+            accessibilityLabel="Manage Teams"
+          >
+            <Ionicons name="people-outline" size={19} color="#4f46e5" />
+          </TouchableOpacity>
+        </View>
       </View>
 
       {/* Multiple Teams Quick Switcher */}
@@ -553,6 +569,28 @@ export default function TeamChatScreen() {
               multiline={false}
             />
 
+            {/* Smart AI Assistant Trigger Button inside Input Tray (Replaces overlapping floating button) */}
+            <TouchableOpacity
+              onPress={() => {
+                triggerHaptic('light');
+                openAIAssistant();
+              }}
+              style={styles.aiTrayBtn}
+              activeOpacity={0.85}
+              accessibilityLabel="Open TaskFlow AI Assistant"
+            >
+              <LinearGradient
+                colors={['#4f46e5', '#7c3aed']}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={styles.aiTrayGradient}
+              >
+                <Ionicons name="sparkles" size={17} color="#ffffff" />
+                <View style={styles.aiTrayDot} />
+              </LinearGradient>
+            </TouchableOpacity>
+
+            {/* Send Message Button */}
             <TouchableOpacity
               onPress={handleSendText}
               style={[styles.sendBtn, !inputText.trim() ? styles.sendBtnDisabled : null]}
@@ -623,6 +661,11 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(79, 70, 229, 0.08)',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  headerRightActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
   chatScroll: {
     flex: 1,
@@ -901,6 +944,35 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     color: '#0f172a',
     fontSize: 13,
+  },
+  aiTrayBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    shadowColor: '#4f46e5',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  aiTrayGradient: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+  },
+  aiTrayDot: {
+    position: 'absolute',
+    top: 5,
+    right: 5,
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#10b981',
+    borderWidth: 1,
+    borderColor: '#ffffff',
   },
   sendBtn: {
     width: 38,

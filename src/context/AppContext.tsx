@@ -150,6 +150,9 @@ interface AppContextValue {
   aiMessages: AIAgentMessage[];
   sendAIPrompt: (prompt: string) => Promise<{ ok: boolean; response: string; actionData?: any }>;
   clearAIMessages: () => void;
+  isAIAssistantOpen: boolean;
+  openAIAssistant: () => void;
+  closeAIAssistant: () => void;
 }
 
 const AppContext = createContext<AppContextValue | null>(null);
@@ -220,7 +223,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [joinRequests, setJoinRequests] = useState<JoinRequest[]>([]);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [aiMessages, setAiMessages] = useState<AIAgentMessage[]>([]);
+  const [isAIAssistantOpen, setIsAIAssistantOpen] = useState<boolean>(false);
   const [isLoading, setIsLoading] = useState<boolean>(true);
+
+  const openAIAssistant = useCallback(() => setIsAIAssistantOpen(true), []);
+  const closeAIAssistant = useCallback(() => setIsAIAssistantOpen(false), []);
 
   // App Lock State
   const [appLockPin, setAppLockPinState] = useState<string | null>(null);
@@ -1719,6 +1726,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         aiMessages,
         sendAIPrompt,
         clearAIMessages,
+        isAIAssistantOpen,
+        openAIAssistant,
+        closeAIAssistant,
       }}
     >
       {children}

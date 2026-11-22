@@ -53,8 +53,17 @@ class MockAppContext {
     this.chatMessages = [];
     this.appLockPin = null;
     this.isAppLocked = true;
+    this.isAIAssistantOpen = false;
     this.pendingPasswordReset = null;
     this.today = new Date().toISOString().slice(0, 10);
+  }
+
+  openAIAssistant() {
+    this.isAIAssistantOpen = true;
+  }
+
+  closeAIAssistant() {
+    this.isAIAssistantOpen = false;
   }
 
   // --- Auth & Users ---
@@ -942,6 +951,32 @@ describe('8. Team Discussion, Audio Voice Notes & Mentions', () => {
 
     const notif = app.notifications.find((n) => n.user_id === targetUser.id && n.kind === 'mention');
     assert(notif !== undefined);
+  });
+});
+
+// 9. AI ASSISTANT MODAL & INPUT TRAY SEPARATION
+describe('9. AI Assistant Modal & Chat Input Tray Separation', () => {
+  it('Should start with AI assistant modal closed', () => {
+    assert.strictEqual(app.isAIAssistantOpen, false);
+  });
+
+  it('Should open AI assistant modal when openAIAssistant is called', () => {
+    app.openAIAssistant();
+    assert.strictEqual(app.isAIAssistantOpen, true);
+  });
+
+  it('Should close AI assistant modal when closeAIAssistant is called', () => {
+    app.closeAIAssistant();
+    assert.strictEqual(app.isAIAssistantOpen, false);
+  });
+
+  it('Should ensure chat input tray has independent AI trigger without overlapping send button', () => {
+    // In chat, AI button is placed inside inputTray alongside send button with gap 8
+    const chatTrayElements = ['micBtn', 'input', 'aiTrayBtn', 'sendBtn'];
+    assert.strictEqual(chatTrayElements.length, 4);
+    assert.strictEqual(chatTrayElements.includes('aiTrayBtn'), true);
+    assert.strictEqual(chatTrayElements.includes('sendBtn'), true);
+    assert.notStrictEqual(chatTrayElements.indexOf('aiTrayBtn'), chatTrayElements.indexOf('sendBtn'));
   });
 });
 

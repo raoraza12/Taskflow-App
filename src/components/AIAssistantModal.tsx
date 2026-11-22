@@ -25,13 +25,26 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useApp } from '../context/AppContext';
 import { triggerHaptic } from '../lib/haptics';
 import { Colors, Radius, Spacing, Typography } from '../constants/colors';
-import { useRouter } from 'expo-router';
+import { useRouter, usePathname } from 'expo-router';
 
 export const AIAssistantModal: React.FC = () => {
-  const { aiMessages, sendAIPrompt, clearAIMessages, users } = useApp();
+  const {
+    aiMessages,
+    sendAIPrompt,
+    clearAIMessages,
+    users,
+    isAIAssistantOpen,
+    openAIAssistant,
+    closeAIAssistant,
+  } = useApp();
   const router = useRouter();
+  const pathname = usePathname();
 
-  const [isOpen, setIsOpen] = useState(false);
+  // Hide the floating FAB on the chat screen so it never collides with the chat input tray / send button
+  const isChatScreen = Boolean(
+    pathname && (pathname.includes('/chat') || pathname.includes('teams/chat'))
+  );
+
   const [inputText, setInputText] = useState('');
   const [isThinking, setIsThinking] = useState(false);
   const scrollViewRef = useRef<ScrollView>(null);
@@ -83,32 +96,40 @@ export const AIAssistantModal: React.FC = () => {
 
   return (
     <>
-      {/* Floating Smart AI FAB */}
-      <View style={styles.fabContainer}>
-        <Animated.View style={animatedFabStyle}>
-          <TouchableOpacity
-            style={styles.fabBtn}
-            onPress={() => {
-              triggerHaptic('light');
-              setIsOpen(true);
-            }}
-            activeOpacity={0.85}
-          >
-            <LinearGradient
-              colors={['#4f46e5', '#7c3aed']}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={styles.fabGradient}
+      {/* Floating Smart AI FAB (Rendered on other screens, hidden on Chat screen to prevent collision) */}
+      {!isChatScreen && (
+        <View style={styles.fabContainer}>
+          <Animated.View style={animatedFabStyle}>
+            <TouchableOpacity
+              style={styles.fabBtn}
+              onPress={() => {
+                triggerHaptic('light');
+                openAIAssistant();
+              }}
+              activeOpacity={0.85}
+              accessibilityLabel="Open TaskFlow AI Assistant"
             >
-              <Ionicons name="sparkles" size={22} color="#ffffff" />
-              <View style={styles.fabOnlineDot} />
-            </LinearGradient>
-          </TouchableOpacity>
-        </Animated.View>
-      </View>
+              <LinearGradient
+                colors={['#4f46e5', '#7c3aed']}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={styles.fabGradient}
+              >
+                <Ionicons name="sparkles" size={22} color="#ffffff" />
+                <View style={styles.fabOnlineDot} />
+              </LinearGradient>
+            </TouchableOpacity>
+          </Animated.View>
+        </View>
+      )}
 
       {/* AI Assistant Chat Modal */}
-      <Modal visible={isOpen} transparent animationType="slide" onRequestClose={() => setIsOpen(false)}>
+      <Modal
+        visible={isAIAssistantOpen}
+        transparent
+        animationType="slide"
+        onRequestClose={closeAIAssistant}
+      >
         <KeyboardAvoidingView
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}
           style={styles.modalOverlay}
@@ -141,7 +162,7 @@ export const AIAssistantModal: React.FC = () => {
                 >
                   <Ionicons name="refresh-outline" size={19} color="#64748b" />
                 </TouchableOpacity>
-                <TouchableOpacity onPress={() => setIsOpen(false)} style={styles.iconBtn}>
+                <TouchableOpacity onPress={closeAIAssistant} style={styles.iconBtn}>
                   <Ionicons name="close" size={22} color="#64748b" />
                 </TouchableOpacity>
               </View>
@@ -214,7 +235,7 @@ export const AIAssistantModal: React.FC = () => {
                           <TouchableOpacity
                             style={styles.viewTasksBtn}
                             onPress={() => {
-                              setIsOpen(false);
+                              closeAIAssistant();
                               router.push('/(tabs)/tasks');
                             }}
                           >
