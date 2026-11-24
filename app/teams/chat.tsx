@@ -25,14 +25,16 @@ import { useApp } from '../../src/context/AppContext';
 import { Colors, Radius, Spacing, Typography } from '../../src/constants/colors';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { ChatMessage } from '../../src/types/database';
+import { ChatMessage, Profile } from '../../src/types/database';
 import { voiceRecorder, VoicePlayerService } from '../../src/lib/audioVoiceRecorder';
 import { triggerHaptic } from '../../src/lib/haptics';
+import { UserProfileModal } from '../../src/components/UserProfileModal';
 
 export default function TeamChatScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{ teamId?: string }>();
   const { user, users, teams, chatMessages, sendChatMessage, openAIAssistant } = useApp();
+  const [viewProfileUser, setViewProfileUser] = useState<Profile | null>(null);
 
   // Active Team selection (supports switching between multiple teams)
   const [selectedTeamId, setSelectedTeamId] = useState<string>(params.teamId || teams[0]?.id || '');
@@ -395,6 +397,16 @@ export default function TeamChatScreen() {
           const isMe = msg.user_id === user?.id;
           const isVoice = msg.type === 'voice';
           const isPlayingThis = playingMsgId === msg.id;
+          const authorProfile: Profile = users.find((u) => u.id === msg.user_id) || {
+            id: msg.user_id,
+            google_id: '',
+            name: msg.user_name || 'Member',
+            username: msg.user_username || 'member',
+            email: '',
+            picture: msg.user_picture,
+            email_verified: true,
+            created_at: '',
+          };
 
           return (
             <Animated.View
@@ -403,7 +415,11 @@ export default function TeamChatScreen() {
               style={[styles.msgRow, isMe ? styles.msgRowMe : styles.msgRowOther]}
             >
               {!isMe && (
-                <View style={styles.avatarWrap}>
+                <TouchableOpacity
+                  style={styles.avatarWrap}
+                  onPress={() => setViewProfileUser(authorProfile)}
+                  activeOpacity={0.75}
+                >
                   {msg.user_picture ? (
                     <Image source={{ uri: msg.user_picture }} style={styles.avatarImg} />
                   ) : (
@@ -411,18 +427,22 @@ export default function TeamChatScreen() {
                       <Text style={styles.avatarText}>{msg.user_name?.charAt(0).toUpperCase() || 'U'}</Text>
                     </View>
                   )}
-                </View>
+                </TouchableOpacity>
               )}
 
               <View style={[styles.bubble, isMe ? styles.bubbleMe : styles.bubbleOther]}>
                 {/* Author Name & Username */}
                 {!isMe && (
-                  <View style={styles.authorRow}>
+                  <TouchableOpacity
+                    style={styles.authorRow}
+                    onPress={() => setViewProfileUser(authorProfile)}
+                    activeOpacity={0.75}
+                  >
                     <Text style={styles.authorName}>{msg.user_name}</Text>
                     <View style={styles.usernamePill}>
                       <Text style={styles.usernamePillText}>@{msg.user_username}</Text>
                     </View>
-                  </View>
+                  </TouchableOpacity>
                 )}
 
                 {/* Content: Voice Note or Text */}
@@ -602,6 +622,13 @@ export default function TeamChatScreen() {
           </View>
         )}
       </KeyboardAvoidingView>
+
+      {/* Member Profile & Connection Modal */}
+      <UserProfileModal
+        visible={!!viewProfileUser}
+        targetUser={viewProfileUser}
+        onClose={() => setViewProfileUser(null)}
+      />
     </SafeAreaView>
   );
 }

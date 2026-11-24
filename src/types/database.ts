@@ -12,6 +12,11 @@ export type NotificationKind =
   | 'task_due_soon'
   | 'chat_mention'
   | 'member_removed'
+  | 'teammate_request'
+  | 'teammate_accepted'
+  | 'team_joined'
+  | 'team_left'
+  | 'team_deleted'
   | 'system';
 
 export interface Profile {
@@ -101,7 +106,21 @@ export interface AppNotification {
   read: boolean;
   related_task_id?: string;
   related_join_request_id?: string;
+  related_connection_id?: string;
   created_at: string;
+}
+
+export type TeammateRequestStatus = 'pending' | 'accepted' | 'declined';
+
+export interface TeammateConnection {
+  id: string;
+  from_user_id: string;
+  to_user_id: string;
+  status: TeammateRequestStatus;
+  created_at: string;
+  resolved_at?: string;
+  from_profile?: Profile;
+  to_profile?: Profile;
 }
 
 export interface JoinRequest {

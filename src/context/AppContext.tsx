@@ -16,10 +16,12 @@ import {
   Role,
   ChatMessage,
   AIAgentMessage,
+  TeammateConnection,
 } from '../types/database';
 import { AppThemeKey } from '../constants/theme';
 import { runMultiModelAI, AIContextData, AIEngineResult } from '../lib/aiAgentEngine';
 import { generateVoiceToneWav } from '../lib/audioVoiceRecorder';
+import { triggerDeviceNotification } from '../lib/deviceNotifications';
 
 /**
  * Strict Super Admin & App Ownership Check:
@@ -153,6 +155,12 @@ interface AppContextValue {
   isAIAssistantOpen: boolean;
   openAIAssistant: () => void;
   closeAIAssistant: () => void;
+  // Teammate Member-to-Member Connections
+  connections: TeammateConnection[];
+  sendTeammateRequest: (toUserId: string) => Promise<{ ok: boolean; error?: string }>;
+  acceptTeammateRequest: (connectionId: string) => Promise<{ ok: boolean; error?: string }>;
+  declineTeammateRequest: (connectionId: string) => Promise<{ ok: boolean; error?: string }>;
+  getConnectionStatus: (otherUserId: string) => 'none' | 'pending_sent' | 'pending_received' | 'connected';
 }
 
 const AppContext = createContext<AppContextValue | null>(null);
@@ -168,6 +176,7 @@ const STORE_KEYS = {
   NOTIFICATIONS: 'tf_notifs',
   HISTORY: 'tf_history',
   JOIN_REQUESTS: 'tf_requests',
+  CONNECTIONS: 'tf_connections',
   APP_LOCK_PIN: 'tf_app_lock_pin',
   THEME: 'tf_theme',
   CHAT_MESSAGES: 'tf_chat_messages',
@@ -221,6 +230,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [history, setHistory] = useState<ActivityLog[]>([]);
   const [joinRequests, setJoinRequests] = useState<JoinRequest[]>([]);
+  const [connections, setConnections] = useState<TeammateConnection[]>([]);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [aiMessages, setAiMessages] = useState<AIAgentMessage[]>([]);
   const [isAIAssistantOpen, setIsAIAssistantOpen] = useState<boolean>(false);
@@ -462,6 +472,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       const rawRequests = await secureGet(STORE_KEYS.JOIN_REQUESTS);
       if (rawRequests) setJoinRequests(JSON.parse(rawRequests));
+
+      const rawConnections = await secureGet(STORE_KEYS.CONNECTIONS);
+      if (rawConnections) setConnections(JSON.parse(rawConnections));
 
       const rawChat = await secureGet(STORE_KEYS.CHAT_MESSAGES);
       if (rawChat) {
@@ -929,8 +942,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!name) return { ok: false, error: 'Team name is required' };
     if (input.joinPassword.length < 4) return { ok: false, error: 'Team password must be at least 4 characters' };
 
-    const teamId = `team_${Date.now()}`;
     const inviteCode = Math.random().toString(36).substring(2, 8).toUpperCase();
+    const teamId = `team_${inviteCode.toLowerCase()}`;
 
     const newTeam: Team = {
       id: teamId,
@@ -1015,12 +1028,62 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { ok: true, team: targetTeam };
     }
 
-    // 4. Automatically join member into the team workspace
+    // 4. Team Member Approval Flow:
+    // If user is not the team creator, create a pending Join Request for Team Leader approval
+    if (targetTeam.owner_id !== user.id) {
+      const existingReq = joinRequests.find(
+        (r) => r.team_id === targetTeam.id && r.user_id === user.id && r.status === 'pending'
+      );
+      if (existingReq) {
+        return { ok: true, team: targetTeam, error: 'Your join request is already pending Leader approval.' };
+      }
+
+      const newReq: JoinRequest = {
+        id: `req_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        team_id: targetTeam.id,
+        user_id: user.id,
+        status: 'pending',
+        created_at: new Date().toISOString(),
+        profile: user,
+        team: targetTeam,
+      };
+
+      const updatedRequests = [newReq, ...joinRequests];
+      setJoinRequests(updatedRequests);
+      await persist(STORE_KEYS.JOIN_REQUESTS, updatedRequests);
+
+      // Create notification for team leader
+      const leaderNotif: AppNotification = {
+        id: `notif_${Date.now()}`,
+        user_id: targetTeam.owner_id,
+        kind: 'join_request',
+        title: 'New Member Join Request',
+        body: `${user.name} (@${user.username || 'member'}) has requested to join "${targetTeam.name}"`,
+        read: false,
+        related_join_request_id: newReq.id,
+        created_at: new Date().toISOString(),
+      };
+      setNotifications((prev) => {
+        const updated = [leaderNotif, ...prev];
+        persist(STORE_KEYS.NOTIFICATIONS, updated);
+        return updated;
+      });
+
+      triggerDeviceNotification({
+        title: 'New Member Join Request',
+        body: `${user.name} requested to join "${targetTeam.name}"`,
+      });
+
+      logAction('request_join', `Requested to join "${targetTeam.name}" (Code: ${cleanCode})`);
+      return { ok: true, team: targetTeam };
+    }
+
+    // 5. If user created the team (or is owner): directly add as owner
     const newMember: TeamMember = {
       id: `member_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       team_id: targetTeam.id,
       user_id: user.id,
-      role: targetTeam.owner_id === user.id ? 'owner' : 'member',
+      role: 'owner',
       joined_at: new Date().toISOString(),
       profile: user,
     };
@@ -1079,16 +1142,40 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       id: `notif_${Date.now()}`,
       user_id: req.user_id,
       kind: 'join_result',
-      title: 'Join Request Approved!',
+      title: 'Join Request Approved! 🎉',
       body: `You are now a member of "${team.name}"`,
       read: false,
       created_at: new Date().toISOString(),
     };
+
+    // Notify all existing team members
+    const teamMembersToNotify = members.filter((m) => m.team_id === team.id && m.user_id !== req.user_id);
+    const peerNotifs: AppNotification[] = teamMembersToNotify.map((m) => ({
+      id: `notif_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      user_id: m.user_id,
+      kind: 'team_joined',
+      title: 'New Member Joined Team',
+      body: `${requester?.name || 'A new member'} joined "${team.name}"`,
+      read: false,
+      created_at: new Date().toISOString(),
+    }));
+
     setNotifications((prev) => {
-      const updated = [userNotif, ...prev];
+      const updated = [userNotif, ...peerNotifs, ...prev];
       persist(STORE_KEYS.NOTIFICATIONS, updated);
       return updated;
     });
+
+    triggerDeviceNotification({
+      title: 'Join Request Approved! 🎉',
+      body: `You are now a member of "${team.name}"`,
+    });
+
+    // Send system announcement in group chat
+    sendChatMessage({
+      teamId: team.id,
+      text: `🎉 ${requester?.name || 'A new member'} has joined "${team.name}"! Welcome to the team!`,
+    }).catch(() => {});
 
     logAction('approve_join', `Approved join request for ${requester?.name || 'user'}`);
     return { ok: true };
@@ -1126,6 +1213,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!team) return { ok: false, error: 'Team not found' };
     if (team.owner_id !== user.id) return { ok: false, error: 'Only team leader can delete the team' };
 
+    const teamName = team.name;
+    const teamMembersToNotify = members.filter((m) => m.team_id === teamId && m.user_id !== user.id);
+    const delNotifs: AppNotification[] = teamMembersToNotify.map((m) => ({
+      id: `notif_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      user_id: m.user_id,
+      kind: 'team_deleted',
+      title: 'Team Deleted',
+      body: `⚠️ Team "${teamName}" was deleted by ${user.name}.`,
+      read: false,
+      created_at: new Date().toISOString(),
+    }));
+
+    setNotifications((prev) => {
+      const updated = [...delNotifs, ...prev];
+      persist(STORE_KEYS.NOTIFICATIONS, updated);
+      return updated;
+    });
+
+    triggerDeviceNotification({
+      title: 'Team Deleted',
+      body: `⚠️ Team "${teamName}" was deleted by ${user.name}.`,
+    });
+
     const updatedTeams = teams.filter((t) => t.id !== teamId);
     const updatedMembers = members.filter((m) => m.team_id !== teamId);
     const updatedTasks = tasks.filter((t) => t.team_id !== teamId);
@@ -1138,7 +1248,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     await persist(STORE_KEYS.MEMBERS, updatedMembers);
     await persist(STORE_KEYS.TASKS, updatedTasks);
 
-    logAction('delete_team', `Deleted team "${team.name}"`);
+    logAction('delete_team', `Deleted team "${teamName}"`);
     return { ok: true };
   };
 
@@ -1194,11 +1304,157 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!team) return { ok: false, error: 'Team not found' };
     if (team.owner_id === user.id) return { ok: false, error: 'Leader cannot leave. Delete team instead.' };
 
+    const teamName = team.name;
     const updatedMembers = members.filter((m) => !(m.team_id === teamId && m.user_id === user.id));
     setMembers(updatedMembers);
     await persist(STORE_KEYS.MEMBERS, updatedMembers);
-    logAction('leave_team', `Left team "${team.name}"`);
+
+    // Send system announcement in group chat
+    sendChatMessage({
+      teamId,
+      text: `🚪 ${user.name} has left the team.`,
+    }).catch(() => {});
+
+    // Notify remaining team members
+    const notifs: AppNotification[] = updatedMembers
+      .filter((m) => m.team_id === teamId)
+      .map((m) => ({
+        id: `notif_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        user_id: m.user_id,
+        kind: 'team_left',
+        title: 'Teammate Left',
+        body: `${user.name} has left "${teamName}"`,
+        read: false,
+        created_at: new Date().toISOString(),
+      }));
+
+    setNotifications((prev) => {
+      const updated = [...notifs, ...prev];
+      persist(STORE_KEYS.NOTIFICATIONS, updated);
+      return updated;
+    });
+
+    triggerDeviceNotification({
+      title: 'Teammate Left',
+      body: `${user.name} left "${teamName}"`,
+    });
+
+    logAction('leave_team', `Left team "${teamName}"`);
     return { ok: true };
+  };
+
+  // Teammate Member-to-Member Connection Actions
+  const sendTeammateRequest = async (toUserId: string) => {
+    if (!user) return { ok: false, error: 'Must be logged in' };
+    if (user.id === toUserId) return { ok: false, error: 'Cannot connect with yourself' };
+
+    const existing = connections.find(
+      (c) =>
+        ((c.from_user_id === user.id && c.to_user_id === toUserId) ||
+          (c.from_user_id === toUserId && c.to_user_id === user.id)) &&
+        c.status !== 'declined'
+    );
+    if (existing) {
+      return { ok: true, error: 'Request or connection already exists' };
+    }
+
+    const newConn: TeammateConnection = {
+      id: `conn_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      from_user_id: user.id,
+      to_user_id: toUserId,
+      status: 'pending',
+      created_at: new Date().toISOString(),
+      from_profile: user,
+      to_profile: users.find((u) => u.id === toUserId),
+    };
+
+    const updatedConns = [newConn, ...connections];
+    setConnections(updatedConns);
+    await persist(STORE_KEYS.CONNECTIONS, updatedConns);
+
+    const notif: AppNotification = {
+      id: `notif_${Date.now()}`,
+      user_id: toUserId,
+      kind: 'teammate_request',
+      title: 'Teammate Request',
+      body: `${user.name} (@${user.username || 'member'}) sent you a teammate request!`,
+      read: false,
+      related_connection_id: newConn.id,
+      created_at: new Date().toISOString(),
+    };
+    setNotifications((prev) => {
+      const updated = [notif, ...prev];
+      persist(STORE_KEYS.NOTIFICATIONS, updated);
+      return updated;
+    });
+
+    triggerDeviceNotification({
+      title: 'New Teammate Request',
+      body: `${user.name} sent you a connection request!`,
+    });
+
+    logAction('teammate_request', `Sent teammate request to user ${toUserId}`);
+    return { ok: true };
+  };
+
+  const acceptTeammateRequest = async (connectionId: string) => {
+    if (!user) return { ok: false, error: 'Must be logged in' };
+    const conn = connections.find((c) => c.id === connectionId);
+    if (!conn) return { ok: false, error: 'Connection request not found' };
+
+    const updatedConns = connections.map((c) =>
+      c.id === connectionId ? { ...c, status: 'accepted' as const, resolved_at: new Date().toISOString() } : c
+    );
+    setConnections(updatedConns);
+    await persist(STORE_KEYS.CONNECTIONS, updatedConns);
+
+    // Notify original requester
+    const notif: AppNotification = {
+      id: `notif_${Date.now()}`,
+      user_id: conn.from_user_id,
+      kind: 'teammate_accepted',
+      title: 'Teammate Request Accepted! ✨',
+      body: `${user.name} accepted your teammate request. You are now connected!`,
+      read: false,
+      related_connection_id: connectionId,
+      created_at: new Date().toISOString(),
+    };
+    setNotifications((prev) => {
+      const updated = [notif, ...prev];
+      persist(STORE_KEYS.NOTIFICATIONS, updated);
+      return updated;
+    });
+
+    triggerDeviceNotification({
+      title: 'Teammate Connected! ✨',
+      body: `${user.name} accepted your connection request!`,
+    });
+
+    logAction('accept_teammate', `Accepted teammate request from user ${conn.from_user_id}`);
+    return { ok: true };
+  };
+
+  const declineTeammateRequest = async (connectionId: string) => {
+    const updatedConns = connections.map((c) =>
+      c.id === connectionId ? { ...c, status: 'declined' as const, resolved_at: new Date().toISOString() } : c
+    );
+    setConnections(updatedConns);
+    await persist(STORE_KEYS.CONNECTIONS, updatedConns);
+    return { ok: true };
+  };
+
+  const getConnectionStatus = (otherUserId: string): 'none' | 'pending_sent' | 'pending_received' | 'connected' => {
+    if (!user || user.id === otherUserId) return 'none';
+    const conn = connections.find(
+      (c) =>
+        ((c.from_user_id === user.id && c.to_user_id === otherUserId) ||
+          (c.from_user_id === otherUserId && c.to_user_id === user.id)) &&
+        c.status !== 'declined'
+    );
+    if (!conn) return 'none';
+    if (conn.status === 'accepted') return 'connected';
+    if (conn.from_user_id === user.id) return 'pending_sent';
+    return 'pending_received';
   };
 
   const getTeamMembers = (teamId: string) => {
@@ -1277,6 +1533,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         persist(STORE_KEYS.NOTIFICATIONS, updated);
         return updated;
       });
+
+      triggerDeviceNotification({
+        title: 'New Task Assigned 📋',
+        body: `${user.name} assigned: "${newTask.title}". Deadline: ${newTask.due_date}.`,
+      });
     }
 
     logAction('create_task', `Created task "${newTask.title}"`);
@@ -1320,6 +1581,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const updated = [notif, ...prev];
         persist(STORE_KEYS.NOTIFICATIONS, updated);
         return updated;
+      });
+
+      triggerDeviceNotification({
+        title: 'Task Submitted for Review 🚀',
+        body: `${user.name} submitted task: "${task.title}". Ready for leader approval.`,
       });
     }
 
@@ -1729,6 +1995,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         isAIAssistantOpen,
         openAIAssistant,
         closeAIAssistant,
+        connections,
+        sendTeammateRequest,
+        acceptTeammateRequest,
+        declineTeammateRequest,
+        getConnectionStatus,
       }}
     >
       {children}

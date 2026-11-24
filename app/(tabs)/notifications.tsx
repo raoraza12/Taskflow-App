@@ -16,6 +16,8 @@ export default function NotificationsScreen() {
     markAllNotificationsRead,
     approveJoinRequest,
     declineJoinRequest,
+    acceptTeammateRequest,
+    declineTeammateRequest,
     unreadCount,
     theme,
   } = useApp();
@@ -71,6 +73,14 @@ export default function NotificationsScreen() {
                         ? 'person-add'
                         : n.kind === 'join_result'
                         ? 'checkmark-circle'
+                        : n.kind === 'teammate_request' || n.kind === 'teammate_accepted'
+                        ? 'people'
+                        : n.kind === 'team_joined'
+                        ? 'person-add'
+                        : n.kind === 'team_left'
+                        ? 'exit-outline'
+                        : n.kind === 'team_deleted'
+                        ? 'trash-bin-outline'
                         : n.kind === 'task_assigned'
                         ? 'clipboard'
                         : n.kind === 'task_submitted'
@@ -89,8 +99,10 @@ export default function NotificationsScreen() {
                         ? Colors.warn
                         : n.kind === 'task_submitted'
                         ? '#0284c7'
-                        : n.kind === 'member_removed'
+                        : n.kind === 'member_removed' || n.kind === 'team_deleted' || n.kind === 'team_left'
                         ? Colors.danger
+                        : n.kind === 'teammate_request' || n.kind === 'teammate_accepted'
+                        ? '#4f46e5'
                         : !n.read
                         ? currentTheme.colors.primary
                         : currentTheme.colors.subtext
@@ -129,6 +141,30 @@ export default function NotificationsScreen() {
                         size="sm"
                         onPress={() => {
                           declineJoinRequest(n.related_join_request_id!);
+                          markNotificationRead(n.id);
+                        }}
+                      />
+                    </View>
+                  )}
+
+                  {/* Direct Action for Teammate Connection Requests */}
+                  {n.kind === 'teammate_request' && n.related_connection_id && (
+                    <View style={styles.actionRow}>
+                      <Button
+                        title="Accept Teammate"
+                        size="sm"
+                        onPress={() => {
+                          acceptTeammateRequest(n.related_connection_id!);
+                          markNotificationRead(n.id);
+                        }}
+                        style={{ marginRight: Spacing.sm }}
+                      />
+                      <Button
+                        title="Decline"
+                        variant="danger"
+                        size="sm"
+                        onPress={() => {
+                          declineTeammateRequest(n.related_connection_id!);
                           markNotificationRead(n.id);
                         }}
                       />

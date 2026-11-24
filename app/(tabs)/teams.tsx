@@ -17,10 +17,11 @@ import { Badge } from '../../src/components/Badge';
 import { Button } from '../../src/components/Button';
 import { Input } from '../../src/components/Input';
 import { Ionicons } from '@expo/vector-icons';
-import { Role } from '../../src/types/database';
+import { Role, Profile } from '../../src/types/database';
 import { THEMES } from '../../src/constants/theme';
 import { useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
+import { UserProfileModal } from '../../src/components/UserProfileModal';
 
 export default function TeamsScreen() {
   const router = useRouter();
@@ -49,6 +50,8 @@ export default function TeamsScreen() {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showJoinModal, setShowJoinModal] = useState(false);
   const [showRenameModal, setShowRenameModal] = useState(false);
+  const [viewProfileUser, setViewProfileUser] = useState<Profile | null>(null);
+  const [viewProfileRole, setViewProfileRole] = useState<string>('');
 
   // Forms
   const [newTeamName, setNewTeamName] = useState('');
@@ -381,7 +384,16 @@ export default function TeamsScreen() {
 
             return (
               <Card key={m.id} style={styles.memberCard}>
-                <View style={styles.memberRow}>
+                <TouchableOpacity
+                  style={styles.memberRow}
+                  activeOpacity={0.75}
+                  onPress={() => {
+                    if (m.profile) {
+                      setViewProfileUser(m.profile);
+                      setViewProfileRole(m.role);
+                    }
+                  }}
+                >
                   <View style={[styles.memberAvatar, { backgroundColor: currentTheme.colors.primaryLight }]}>
                     <Text style={[styles.avatarText, { color: currentTheme.colors.primary }]}>
                       {m.profile?.name?.charAt(0).toUpperCase() || 'U'}
@@ -402,7 +414,7 @@ export default function TeamsScreen() {
                     label={m.role}
                     variant={isOwner ? 'primary' : m.role === 'admin' ? 'warning' : 'muted'}
                   />
-                </View>
+                </TouchableOpacity>
 
                 {/* Leader Actions on other members */}
                 {isLeader && !isSelf && (
@@ -629,6 +641,14 @@ export default function TeamsScreen() {
           </Pressable>
         </Pressable>
       </Modal>
+
+      {/* Real Modal: User Profile & Teammate Request */}
+      <UserProfileModal
+        visible={!!viewProfileUser}
+        targetUser={viewProfileUser}
+        teamRole={viewProfileRole}
+        onClose={() => setViewProfileUser(null)}
+      />
     </ScreenWrapper>
   );
 }

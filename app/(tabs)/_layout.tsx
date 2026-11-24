@@ -130,10 +130,7 @@ export default function TabLayout() {
         />
       </Tabs>
 
-      {/* Floating Team Group Chat across all screens (Left Side) */}
-      <FloatingChatButton />
-
-      {/* Floating Smart AI Agent across all screens (Right Side) */}
+      {/* Floating Smart AI Agent across all screens (Right Side - raised above nav bar) */}
       <AIAssistantModal />
     </View>
   );

@@ -26,6 +26,7 @@ export default function EditTaskScreen() {
     addSubtask,
     toggleSubtask,
     deleteSubtask,
+    canManageTeam,
     theme,
   } = useApp();
   const currentTheme = THEMES[theme] || THEMES.snow;
@@ -111,6 +112,8 @@ export default function EditTaskScreen() {
     return list;
   }, [rawMembers, users]);
   const isAssignee = task.assignee_id === user?.id;
+  // Only team leader/admin/owner can edit & delete tasks; assignees can only submit for review
+  const canEditOrDelete = canManageTeam(task.team_id ?? '') || task.created_by_id === user?.id;
 
   const handleSave = async () => {
     if (!title.trim()) {
@@ -182,6 +185,19 @@ export default function EditTaskScreen() {
 
   return (
     <ScreenWrapper title="Edit Task" subtitle="Modify Ticket, Assignee & Subtasks" showBack>
+      {/* Read-only notification banner for team members */}
+      {!canEditOrDelete && (
+        <View style={styles.readOnlyBanner}>
+          <Ionicons name="lock-closed" size={18} color="#4f46e5" />
+          <View style={{ flex: 1, marginLeft: 8 }}>
+            <Text style={styles.readOnlyTitle}>Assigned Member View</Text>
+            <Text style={styles.readOnlySub}>
+              Only the Team Leader or Task Creator can modify or delete task details. You can complete checklist items and submit for approval.
+            </Text>
+          </View>
+        </View>
+      )}
+
       {/* 0. Submission Status Banner */}
       {task.status === 'submitted' && (
         <View style={styles.submittedAlert}>
@@ -262,6 +278,7 @@ export default function EditTaskScreen() {
         placeholder="Task title..."
         value={title}
         onChangeText={setTitle}
+        editable={canEditOrDelete}
       />
 
       <Input
@@ -270,6 +287,7 @@ export default function EditTaskScreen() {
         value={description}
         onChangeText={setDescription}
         multiline
+        editable={canEditOrDelete}
       />
 
       {/* 3. Status Selection */}
@@ -495,19 +513,23 @@ export default function EditTaskScreen() {
         />
       )}
 
-      {/* Action Buttons */}
-      <Button
-        title="Save Changes"
-        onPress={handleSave}
-        style={{ marginTop: Spacing.sm }}
-      />
+      {/* Action Buttons — only leader/admin/creator can save & delete */}
+      {canEditOrDelete && (
+        <>
+          <Button
+            title="Save Changes"
+            onPress={handleSave}
+            style={{ marginTop: Spacing.sm }}
+          />
 
-      <Button
-        title="Delete Task"
-        variant="danger"
-        onPress={handleDelete}
-        style={{ marginTop: Spacing.sm, marginBottom: Spacing.xl }}
-      />
+          <Button
+            title="Delete Task"
+            variant="danger"
+            onPress={handleDelete}
+            style={{ marginTop: Spacing.sm, marginBottom: Spacing.xl }}
+          />
+        </>
+      )}
     </ScreenWrapper>
   );
 }
@@ -610,5 +632,26 @@ const styles = StyleSheet.create({
     fontSize: Typography.body,
     marginLeft: Spacing.sm,
     flex: 1,
+  },
+  readOnlyBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(79, 70, 229, 0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(79, 70, 229, 0.3)',
+    borderRadius: Radius.md,
+    padding: Spacing.md,
+    marginBottom: Spacing.md,
+  },
+  readOnlyTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#4f46e5',
+  },
+  readOnlySub: {
+    fontSize: 11,
+    color: '#64748b',
+    marginTop: 2,
+    lineHeight: 16,
   },
 });

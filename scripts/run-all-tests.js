@@ -50,6 +50,7 @@ class MockAppContext {
     this.notifications = [];
     this.history = [];
     this.joinRequests = [];
+    this.connections = [];
     this.chatMessages = [];
     this.appLockPin = null;
     this.isAppLocked = true;
@@ -380,6 +381,60 @@ class MockAppContext {
         ...m,
         profile: this.users.find((u) => u.id === m.user_id) || m.profile,
       }));
+  }
+
+  // --- Teammate Member Connections ---
+  sendTeammateRequest(toUserId) {
+    if (!this.user) return { ok: false, error: 'Must be logged in' };
+    if (this.user.id === toUserId) return { ok: false, error: 'Cannot connect with self' };
+    const conn = {
+      id: `conn_${Date.now()}`,
+      from_user_id: this.user.id,
+      to_user_id: toUserId,
+      status: 'pending',
+      created_at: new Date().toISOString(),
+    };
+    this.connections.push(conn);
+    this.notifications.push({
+      id: `notif_${Date.now()}`,
+      user_id: toUserId,
+      kind: 'teammate_request',
+      title: 'New Teammate Request',
+      body: `${this.user.name} sent you a connection request!`,
+      related_connection_id: conn.id,
+      read: false,
+    });
+    return { ok: true, connection: conn };
+  }
+
+  acceptTeammateRequest(connId) {
+    const conn = this.connections.find((c) => c.id === connId);
+    if (!conn) return { ok: false, error: 'Not found' };
+    conn.status = 'accepted';
+    return { ok: true, connection: conn };
+  }
+
+  getConnectionStatus(otherUserId) {
+    if (!this.user || this.user.id === otherUserId) return 'none';
+    const conn = this.connections.find(
+      (c) =>
+        ((c.from_user_id === this.user.id && c.to_user_id === otherUserId) ||
+          (c.from_user_id === otherUserId && c.to_user_id === this.user.id)) &&
+        c.status !== 'declined'
+    );
+    if (!conn) return 'none';
+    if (conn.status === 'accepted') return 'connected';
+    if (conn.from_user_id === this.user.id) return 'pending_sent';
+    return 'pending_received';
+  }
+
+  canManageTeam(teamId) {
+    const member = this.members.find((m) => m.team_id === teamId && m.user_id === this.user.id);
+    return member?.role === 'owner' || member?.role === 'admin';
+  }
+
+  canEditOrDeleteTask(task) {
+    return this.canManageTeam(task.team_id) || task.created_by_id === this.user.id;
   }
 
   // --- Tasks ---
@@ -977,6 +1032,66 @@ describe('9. AI Assistant Modal & Chat Input Tray Separation', () => {
     assert.strictEqual(chatTrayElements.includes('aiTrayBtn'), true);
     assert.strictEqual(chatTrayElements.includes('sendBtn'), true);
     assert.notStrictEqual(chatTrayElements.indexOf('aiTrayBtn'), chatTrayElements.indexOf('sendBtn'));
+  });
+});
+
+// 10. TEAMMATE CONNECTIONS & TASK PERMISSION GUARD
+describe('10. Teammate Connections & Task Permission Guard', () => {
+  it('Should send teammate connection request to another user and create alert', () => {
+    const friend = app.users.find((u) => u.id !== app.user.id);
+    assert(friend !== undefined);
+
+    const res = app.sendTeammateRequest(friend.id);
+    assert.strictEqual(res.ok, true);
+    assert.strictEqual(res.connection.status, 'pending');
+
+    const status = app.getConnectionStatus(friend.id);
+    assert.strictEqual(status, 'pending_sent');
+
+    const notif = app.notifications.find((n) => n.user_id === friend.id && n.kind === 'teammate_request');
+    assert(notif !== undefined);
+  });
+
+  it('Should accept teammate connection request and update status to connected', () => {
+    const pending = app.connections.find((c) => c.status === 'pending');
+    assert(pending !== undefined);
+
+    const res = app.acceptTeammateRequest(pending.id);
+    assert.strictEqual(res.ok, true);
+    assert.strictEqual(res.connection.status, 'accepted');
+
+    const status = app.getConnectionStatus(pending.to_user_id);
+    assert.strictEqual(status, 'connected');
+  });
+
+  it('Should block regular assignee from editing or deleting task (Leader/Creator only)', () => {
+    const fakeTeam = { id: 'team_perm_test', name: 'Perm Team', owner_id: 'leader_user_123' };
+    const testTask = {
+      id: 'task_secure_1',
+      team_id: fakeTeam.id,
+      created_by_id: 'leader_user_123',
+      assignee_id: app.user.id, // current logged-in user is merely the assignee!
+      title: 'Protected API Architecture',
+    };
+
+    // Ensure current user is only a member, NOT owner or admin
+    app.members.push({ team_id: fakeTeam.id, user_id: app.user.id, role: 'member' });
+
+    const canEditOrDelete = app.canEditOrDeleteTask(testTask);
+    assert.strictEqual(canEditOrDelete, false); // Must be strictly forbidden!
+  });
+
+  it('Should permit team leader or task creator to edit or delete task', () => {
+    const leaderTask = {
+      id: 'task_leader_1',
+      team_id: 'team_perm_test',
+      created_by_id: app.user.id, // Current user IS the creator
+      assignee_id: 'other_worker',
+      title: 'Leader Created Task',
+    };
+
+    const canEditOrDelete = app.canEditOrDeleteTask(leaderTask);
+    assert.strictEqual(canEditOrDelete, true); // Creator has full rights
   });
 });
 

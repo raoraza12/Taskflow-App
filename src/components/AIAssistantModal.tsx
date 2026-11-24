@@ -302,7 +302,7 @@ export const AIAssistantModal: React.FC = () => {
 const styles = StyleSheet.create({
   fabContainer: {
     position: 'absolute',
-    bottom: Platform.OS === 'ios' ? 104 : 80,
+    bottom: Platform.OS === 'ios' ? 118 : 96,
     right: 18,
     zIndex: 9999,
   },

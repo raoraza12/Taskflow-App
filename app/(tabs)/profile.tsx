@@ -60,7 +60,7 @@ export default function ProfileScreen() {
   const [usernameError, setUsernameError] = useState('');
   const [editPicture, setEditPicture] = useState(user?.picture || '');
   const [editBio, setEditBio] = useState(user?.bio || '');
-  const [selectedRole, setSelectedRole] = useState(user?.job_title || 'UI/UX Designer');
+  const [selectedRole, setSelectedRole] = useState(user?.job_title || '');
   const [customRoleInput, setCustomRoleInput] = useState('');
   const [isCustomRole, setIsCustomRole] = useState(false);
   const [customUrl, setCustomUrl] = useState('');
@@ -131,7 +131,7 @@ export default function ProfileScreen() {
       setIsCustomRole(true);
       setCustomRoleInput(currentJob);
     } else {
-      setSelectedRole(PRESET_ROLES[0].label);
+      setSelectedRole('');
       setIsCustomRole(false);
       setCustomRoleInput('');
     }
@@ -333,7 +333,7 @@ export default function ProfileScreen() {
 
               <View style={styles.jobTitleBadge}>
                 <Ionicons name="briefcase-outline" size={12} color="#059669" />
-                <Text style={styles.jobTitleText}>{user?.job_title || 'UI/UX Designer'}</Text>
+                <Text style={[styles.jobTitleText]}>{user?.job_title || 'No role set'}</Text>
               </View>
             </View>
 
