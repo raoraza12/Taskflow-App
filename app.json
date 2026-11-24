@@ -2,7 +2,7 @@
   "expo": {
     "name": "TaskFlow",
     "slug": "taskflow",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "scheme": "taskflow",
@@ -22,7 +22,8 @@
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#0f172a"
       },
-      "package": "com.taskflow.app"
+      "package": "com.taskflow.app",
+      "versionCode": 2
     },
     "web": {
       "bundler": "metro",
