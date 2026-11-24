@@ -103,7 +103,7 @@ interface AppContextValue {
   checkUsernameAvailable: (username: string, excludeUserId?: string) => boolean;
   // Teams (Team Leader Controls)
   createTeam: (input: CreateTeamInput) => Promise<{ ok: boolean; team?: Team; error?: string }>;
-  requestJoinTeam: (input: JoinTeamInput) => Promise<{ ok: boolean; team?: Team; error?: string }>;
+  requestJoinTeam: (input: JoinTeamInput) => Promise<{ ok: boolean; team?: Team; pendingApproval?: boolean; error?: string }>;
   approveJoinRequest: (requestId: string) => Promise<{ ok: boolean; error?: string }>;
   declineJoinRequest: (requestId: string) => Promise<{ ok: boolean; error?: string }>;
   renameTeam: (teamId: string, newName: string) => Promise<{ ok: boolean; error?: string }>;
@@ -942,6 +942,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!name) return { ok: false, error: 'Team name is required' };
     if (input.joinPassword.length < 4) return { ok: false, error: 'Team password must be at least 4 characters' };
 
+    // Prevent duplicate team names
+    const nameExists = teams.some(
+      (t) => t.name.trim().toLowerCase() === name.toLowerCase()
+    );
+    if (nameExists) {
+      return {
+        ok: false,
+        error: `Team name "${name}" is already registered. Please choose a different team name.`,
+      };
+    }
+
     const inviteCode = Math.random().toString(36).substring(2, 8).toUpperCase();
     const teamId = `team_${inviteCode.toLowerCase()}`;
 
@@ -977,7 +988,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const requestJoinTeam = async (
     input: JoinTeamInput
-  ): Promise<{ ok: boolean; team?: Team; error?: string }> => {
+  ): Promise<{ ok: boolean; team?: Team; pendingApproval?: boolean; error?: string }> => {
     if (!user) return { ok: false, error: 'Must be logged in' };
 
     const cleanName = input.teamName.trim();
@@ -988,17 +999,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!cleanCode) return { ok: false, error: '6-digit invite code is required' };
     if (!cleanPass) return { ok: false, error: 'Team access password is required' };
 
-    // 1. Find team locally by invite code or name
+    // 1. Primary lookup: Match by unique 6-digit invite code
     let targetTeam = teams.find(
-      (t) =>
-        t.invite_code.trim().toUpperCase() === cleanCode ||
-        t.name.trim().toLowerCase() === cleanName.toLowerCase()
+      (t) => t.invite_code && t.invite_code.trim().toUpperCase() === cleanCode
     );
 
+    // 2. Secondary lookup: Only if not found by invite code, match by exact name
+    if (!targetTeam) {
+      targetTeam = teams.find(
+        (t) => t.name && t.name.trim().toLowerCase() === cleanName.toLowerCase()
+      );
+    }
+
     if (targetTeam) {
-      // Team exists in current storage - verify password
-      if (targetTeam.join_password && targetTeam.join_password.trim() !== cleanPass) {
-        return { ok: false, error: 'Team access password is incorrect' };
+      const storedPass = (targetTeam.join_password || '').trim();
+      const enteredPass = cleanPass.trim();
+
+      // Verify password with whitespace trimming & case tolerance
+      if (storedPass && storedPass !== enteredPass && storedPass.toLowerCase() !== enteredPass.toLowerCase()) {
+        return { ok: false, error: 'Team access password is incorrect. Please check the password provided by your Team Leader.' };
       }
     } else {
       // 2. Cross-Device / Cloudless Sync:
@@ -1075,7 +1094,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
 
       logAction('request_join', `Requested to join "${targetTeam.name}" (Code: ${cleanCode})`);
-      return { ok: true, team: targetTeam };
+      return { ok: true, team: targetTeam, pendingApproval: true };
     }
 
     // 5. If user created the team (or is owner): directly add as owner
@@ -1200,10 +1219,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!team) return { ok: false, error: 'Team not found' };
     if (team.owner_id !== user.id) return { ok: false, error: 'Only team leader can rename the team' };
 
-    const updatedTeams = teams.map((t) => (t.id === teamId ? { ...t, name: newName.trim() } : t));
+    const cleanName = newName.trim();
+    if (!cleanName) return { ok: false, error: 'Team name cannot be empty' };
+
+    // Prevent duplicate team name on rename
+    const nameExists = teams.some(
+      (t) => t.id !== teamId && t.name.trim().toLowerCase() === cleanName.toLowerCase()
+    );
+    if (nameExists) {
+      return {
+        ok: false,
+        error: `Another team with the name "${cleanName}" already exists. Please choose a unique name.`,
+      };
+    }
+
+    const updatedTeams = teams.map((t) => (t.id === teamId ? { ...t, name: cleanName } : t));
     setTeams(updatedTeams);
     await persist(STORE_KEYS.TEAMS, updatedTeams);
-    logAction('rename_team', `Renamed team to "${newName}"`);
+    logAction('rename_team', `Renamed team to "${cleanName}"`);
     return { ok: true };
   };
 

@@ -264,6 +264,11 @@ class MockAppContext {
       return { ok: false, error: 'Join password must be at least 4 characters' };
     }
 
+    const cleanName = name.trim();
+    if (this.teams.some((t) => t.name.trim().toLowerCase() === cleanName.toLowerCase())) {
+      return { ok: false, error: `Team name "${cleanName}" is already registered. Please choose a unique name.` };
+    }
+
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
     let code = '';
     for (let i = 0; i < 6; i++) {
@@ -271,8 +276,8 @@ class MockAppContext {
     }
 
     const team = {
-      id: `team_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-      name: name.trim(),
+      id: `team_${code.toLowerCase()}`,
+      name: cleanName,
       owner_id: this.user.id,
       invite_code: code,
       join_password: joinPassword.trim(),
@@ -302,12 +307,15 @@ class MockAppContext {
     if (!cleanCode) return { ok: false, error: 'Invite code is required' };
     if (!cleanPass) return { ok: false, error: 'Password is required' };
 
-    let target = this.teams.find(
-      (t) => t.invite_code.toUpperCase() === cleanCode || t.name.toLowerCase() === cleanName.toLowerCase()
-    );
+    // 1. Primary lookup by unique invite code
+    let target = this.teams.find((t) => t.invite_code.toUpperCase() === cleanCode);
+    if (!target) {
+      target = this.teams.find((t) => t.name.toLowerCase() === cleanName.toLowerCase());
+    }
 
     if (target) {
-      if (target.join_password && target.join_password !== cleanPass) {
+      const storedPass = (target.join_password || '').trim();
+      if (storedPass && storedPass !== cleanPass && storedPass.toLowerCase() !== cleanPass.toLowerCase()) {
         return { ok: false, error: 'Team access password is incorrect' };
       }
     } else {
@@ -835,6 +843,12 @@ describe('6. Teams Workspace Governance & Cross-Device Sync', () => {
     const members = app.getTeamMembers(createdTeam.id);
     assert.strictEqual(members.length, 1);
     assert.strictEqual(members[0].role, 'owner');
+  });
+
+  it('Should reject creating team with already registered name (case-insensitive)', () => {
+    const dupRes = app.createTeam({ name: 'solution tech core', joinPassword: 'anotherpass' });
+    assert.strictEqual(dupRes.ok, false);
+    assert(dupRes.error.includes('already registered'));
   });
 
   it('Should reject member join if password is wrong', () => {

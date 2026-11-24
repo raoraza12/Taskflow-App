@@ -98,7 +98,14 @@ export default function TeamsScreen() {
       setJoinCode('');
       setJoinPass('');
       setShowJoinModal(false);
-      showAlert('Welcome to the Team! 🎉', `You have successfully joined "${targetName}".`);
+      if (res.pendingApproval) {
+        showAlert(
+          'Join Request Submitted ⏳',
+          `Your request to join "${targetName}" has been sent to the Team Leader for approval. You will receive an alert once approved!`
+        );
+      } else {
+        showAlert('Welcome to the Team! 🎉', `You have successfully joined "${targetName}".`);
+      }
     } else {
       setError(res.error || 'Failed to join team');
     }
