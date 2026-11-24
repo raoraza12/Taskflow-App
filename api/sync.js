@@ -1,6 +1,7 @@
 const { put, list } = require('@vercel/blob');
 
 const BLOB_FILENAME = 'taskflow_cloud_state.json';
+const DIRECT_BLOB_URL = 'https://md2eaxjhibirncd2.public.blob.vercel-storage.com/taskflow_cloud_state.json';
 
 const DEFAULT_STATE = {
   teams: [],
@@ -15,6 +16,24 @@ const DEFAULT_STATE = {
 
 // Helper to fetch current cloud state from Vercel Blob
 async function getCloudState() {
+  try {
+    // 1. Instant direct fetch from Blob CDN (bypasses list() eventual consistency)
+    const directRes = await fetch(`${DIRECT_BLOB_URL}?t=${Date.now()}`);
+    if (directRes.ok) {
+      const data = await directRes.json();
+      return {
+        teams: Array.isArray(data.teams) ? data.teams : [],
+        members: Array.isArray(data.members) ? data.members : [],
+        tasks: Array.isArray(data.tasks) ? data.tasks : [],
+        chatMessages: Array.isArray(data.chatMessages) ? data.chatMessages : [],
+        joinRequests: Array.isArray(data.joinRequests) ? data.joinRequests : [],
+        connections: Array.isArray(data.connections) ? data.connections : [],
+        users: Array.isArray(data.users) ? data.users : [],
+        lastUpdated: data.lastUpdated || new Date().toISOString(),
+      };
+    }
+  } catch (_) {}
+
   try {
     const { blobs } = await list({ prefix: BLOB_FILENAME });
     const targetBlob = blobs.find((b) => b.pathname === BLOB_FILENAME || b.pathname.endsWith(BLOB_FILENAME));
