@@ -29,6 +29,7 @@ import {
 } from '../../src/lib/googleAuth';
 import * as WebBrowser from 'expo-web-browser';
 import * as AuthSession from 'expo-auth-session';
+import * as Linking from 'expo-linking';
 
 if (Platform.OS !== 'web') {
   WebBrowser.maybeCompleteAuthSession();
@@ -91,7 +92,75 @@ export default function LoginScreen() {
     return () => clearTimeout(timer);
   }, [countdown]);
 
-  // Process token from URL hash (returned from real Google OAuth redirect)
+  // Process Google OAuth token (Works across Native Deep Link & Web Redirect)
+  const processAuthDeepLink = async (url: string) => {
+    if (!url) return;
+    try {
+      let token = '';
+      if (url.includes('access_token')) {
+        const hashIdx = url.indexOf('#');
+        if (hashIdx !== -1) {
+          const params = new URLSearchParams(url.substring(hashIdx + 1));
+          token = params.get('access_token') || '';
+        }
+        if (!token) {
+          const queryIdx = url.indexOf('?');
+          if (queryIdx !== -1) {
+            const params = new URLSearchParams(url.substring(queryIdx + 1));
+            token = params.get('access_token') || '';
+          }
+        }
+      }
+
+      if (token) {
+        setLoading(true);
+        const profile = await fetchGoogleProfileWithToken(token);
+        const res = await loginWithGoogle({
+          email: profile.email,
+          name: profile.name,
+          picture: profile.picture,
+          google_id: profile.googleId,
+        });
+        setLoading(false);
+        if (res.ok) {
+          try {
+            await WebBrowser.dismissAuthSession();
+          } catch (_) {}
+          router.replace('/(tabs)');
+        } else {
+          setError(res.error || 'Google login failed');
+        }
+      }
+    } catch (err: any) {
+      setLoading(false);
+      setError(err?.message || 'Failed to authenticate Google session');
+    }
+  };
+
+  // Deep Link Listener for Native Android & iOS (receives taskflow://auth#access_token=...)
+  useEffect(() => {
+    if (Platform.OS === 'web') return;
+
+    // Check cold launch initial URL
+    Linking.getInitialURL().then((url) => {
+      if (url && (url.includes('access_token') || url.includes('taskflow://'))) {
+        processAuthDeepLink(url);
+      }
+    });
+
+    // Listen to foreground/background intent links
+    const subscription = Linking.addEventListener('url', (event) => {
+      if (event.url && (event.url.includes('access_token') || event.url.includes('taskflow://'))) {
+        processAuthDeepLink(event.url);
+      }
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, []);
+
+  // Process token from URL hash (returned from real Google OAuth redirect on Web)
   useEffect(() => {
     if (Platform.OS !== 'web' || typeof window === 'undefined') return;
 
@@ -101,24 +170,7 @@ export default function LoginScreen() {
       const accessToken = params.get('access_token');
       if (accessToken) {
         window.history.replaceState(null, '', window.location.pathname);
-        setLoading(true);
-        fetchGoogleProfileWithToken(accessToken)
-          .then(async (profile) => {
-            const res = await loginWithGoogle({
-              email: profile.email,
-              name: profile.name,
-              picture: profile.picture,
-              google_id: profile.googleId,
-            });
-            setLoading(false);
-            if (!res.ok) {
-              setError(res.error || 'Google login failed');
-            }
-          })
-          .catch((err) => {
-            setLoading(false);
-            setError(err?.message || 'Failed to authenticate with Google');
-          });
+        processAuthDeepLink(hash);
       }
     } else if (hash && hash.includes('error=')) {
       const params = new URLSearchParams(hash.substring(1));
@@ -256,26 +308,11 @@ export default function LoginScreen() {
       const scope = encodeURIComponent('openid email profile');
       const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${CONFIG.GOOGLE_CLIENT_ID}&redirect_uri=${encodeURIComponent(
         redirectUri
-      )}&response_type=token&scope=${scope}&prompt=select_account`;
+      )}&response_type=token&scope=${scope}&prompt=select_account&state=native_app`;
 
-      const result = await WebBrowser.openAuthSessionAsync(authUrl, redirectUri);
+      const result = await WebBrowser.openAuthSessionAsync(authUrl, 'taskflow://auth');
       if (result.type === 'success' && result.url) {
-        const hashIndex = result.url.indexOf('#');
-        const fragment = hashIndex !== -1 ? result.url.substring(hashIndex + 1) : '';
-        const params = new URLSearchParams(fragment);
-        const accessToken = params.get('access_token');
-        if (accessToken) {
-          const profile = await fetchGoogleProfileWithToken(accessToken);
-          const res = await loginWithGoogle({
-            email: profile.email,
-            name: profile.name,
-            picture: profile.picture,
-            google_id: profile.googleId,
-          });
-          if (!res.ok) {
-            setError(res.error || 'Google login failed');
-          }
-        }
+        await processAuthDeepLink(result.url);
       }
     } catch (err: any) {
       setError(err?.message || 'Could not open Google Sign-In');

@@ -1,12 +1,30 @@
 import 'react-native-gesture-handler';
-import React from 'react';
+import React, { useEffect } from 'react';
+import { Platform } from 'react-native';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { AppProvider } from '../src/context/AppContext';
 import { Colors } from '../src/constants/colors';
+import * as Updates from 'expo-updates';
 
 export default function RootLayout() {
+  // Silent background Over-The-Air (OTA) updates check on app launch
+  useEffect(() => {
+    async function checkForOTAUpdates() {
+      if (__DEV__ || Platform.OS === 'web') return;
+      try {
+        const update = await Updates.checkForUpdateAsync();
+        if (update.isAvailable) {
+          await Updates.fetchUpdateAsync();
+          await Updates.reloadAsync();
+        }
+      } catch (_) {
+        // Silently continue if network is unavailable
+      }
+    }
+    checkForOTAUpdates();
+  }, []);
   return (
     <GestureHandlerRootView style={{ flex: 1, backgroundColor: Colors.bg }}>
       <StatusBar style="dark" />
