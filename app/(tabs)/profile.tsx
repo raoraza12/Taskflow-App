@@ -337,9 +337,11 @@ export default function ProfileScreen() {
               </View>
             </View>
 
-            <Text style={[styles.userBioText, { color: currentTheme.colors.subtext }]} numberOfLines={3}>
-              {user?.bio || 'No bio added yet. Tap Edit to introduce yourself to your teammates.'}
-            </Text>
+            {Boolean(user?.bio && user.bio.trim().length > 0) && (
+              <Text style={[styles.userBioText, { color: currentTheme.colors.subtext }]} numberOfLines={3}>
+                {user!.bio!.trim()}
+              </Text>
+            )}
 
             <Text style={[styles.userEmail, { color: currentTheme.colors.subtext }]}>{user?.email}</Text>
 

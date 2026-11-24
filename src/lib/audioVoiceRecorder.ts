@@ -44,6 +44,9 @@ export class VoiceRecorderService {
         await ExpoAudio.setAudioModeAsync({
           allowsRecordingIOS: true,
           playsInSilentModeIOS: true,
+          staysActiveInBackground: false,
+          shouldDuckAndroid: true,
+          playThroughEarpieceAndroid: false,
         });
 
         const recording = new ExpoAudio.Recording();
@@ -346,30 +349,59 @@ export class VoicePlayerService {
     // 1. Native Mobile Playback (Android & iOS) via expo-av
     if (Platform.OS !== 'web') {
       let isStopped = false;
-      ExpoAudio.Sound.createAsync(
-        { uri: audioUrl },
-        { shouldPlay: true },
-        (status) => {
-          if (isStopped) return;
-          if (status.isLoaded) {
-            if (status.durationMillis && status.positionMillis) {
-              const pct = Math.min(100, Math.round((status.positionMillis / status.durationMillis) * 100));
-              onProgress(pct);
-            }
-            if (status.didJustFinish) {
-              onProgress(100);
-              onEnded();
+
+      (async () => {
+        try {
+          // Switch to loudspeaker playback mode (forces main loud speaker, NOT phone call earpiece)
+          await ExpoAudio.setAudioModeAsync({
+            allowsRecordingIOS: false,
+            playsInSilentModeIOS: true,
+            playThroughEarpieceAndroid: false,
+            staysActiveInBackground: false,
+            shouldDuckAndroid: false,
+          });
+
+          let playbackUri = audioUrl;
+
+          // If base64 data URI, write to local temp file because Android MediaPlayer cannot play raw data URIs
+          if (audioUrl.startsWith('data:')) {
+            try {
+              const base64Data = audioUrl.includes('base64,') ? audioUrl.split('base64,')[1] : audioUrl;
+              const tempPath = `${FileSystem.cacheDirectory}vn_${Date.now()}_play.m4a`;
+              await FileSystem.writeAsStringAsync(tempPath, base64Data, {
+                encoding: FileSystem.EncodingType.Base64,
+              });
+              playbackUri = tempPath;
+            } catch (writeErr) {
+              console.warn('[AudioPlayer] Error caching base64 audio:', writeErr);
             }
           }
-        }
-      )
-        .then(({ sound }) => {
+
+          if (isStopped) return;
+
+          const { sound } = await ExpoAudio.Sound.createAsync(
+            { uri: playbackUri },
+            { shouldPlay: true, volume: 1.0 },
+            (status) => {
+              if (isStopped) return;
+              if (status.isLoaded) {
+                if (status.durationMillis && status.positionMillis) {
+                  const pct = Math.min(100, Math.round((status.positionMillis / status.durationMillis) * 100));
+                  onProgress(pct);
+                }
+                if (status.didJustFinish) {
+                  onProgress(100);
+                  onEnded();
+                }
+              }
+            }
+          );
           currentActiveNativeSound = sound;
-        })
-        .catch((err) => {
+        } catch (err) {
           console.warn('[AudioPlayer] Native sound playback error:', err);
           onEnded();
-        });
+        }
+      })();
 
       return {
         stop: () => {

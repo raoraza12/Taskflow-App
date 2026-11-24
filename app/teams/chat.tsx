@@ -589,27 +589,6 @@ export default function TeamChatScreen() {
               multiline={false}
             />
 
-            {/* Smart AI Assistant Trigger Button inside Input Tray (Replaces overlapping floating button) */}
-            <TouchableOpacity
-              onPress={() => {
-                triggerHaptic('light');
-                openAIAssistant();
-              }}
-              style={styles.aiTrayBtn}
-              activeOpacity={0.85}
-              accessibilityLabel="Open TaskFlow AI Assistant"
-            >
-              <LinearGradient
-                colors={['#4f46e5', '#7c3aed']}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 1 }}
-                style={styles.aiTrayGradient}
-              >
-                <Ionicons name="sparkles" size={17} color="#ffffff" />
-                <View style={styles.aiTrayDot} />
-              </LinearGradient>
-            </TouchableOpacity>
-
             {/* Send Message Button */}
             <TouchableOpacity
               onPress={handleSendText}

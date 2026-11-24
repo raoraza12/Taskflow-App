@@ -142,15 +142,15 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
               ) : null}
             </View>
 
-            {/* Bio Section */}
-            <View style={[styles.bioBox, { backgroundColor: currentTheme.colors.bg }]}>
-              <Text style={[styles.bioLabel, { color: currentTheme.colors.subtext }]}>BIO</Text>
-              <Text style={[styles.bioContent, { color: currentTheme.colors.text }]}>
-                {targetUser.bio && targetUser.bio.trim().length > 0
-                  ? targetUser.bio.trim()
-                  : 'No personal bio added yet.'}
-              </Text>
-            </View>
+            {/* Bio Section (Rendered only if user manually added a bio) */}
+            {Boolean(targetUser.bio && targetUser.bio.trim().length > 0) && (
+              <View style={[styles.bioBox, { backgroundColor: currentTheme.colors.bg }]}>
+                <Text style={[styles.bioLabel, { color: currentTheme.colors.subtext }]}>BIO</Text>
+                <Text style={[styles.bioContent, { color: currentTheme.colors.text }]}>
+                  {targetUser.bio!.trim()}
+                </Text>
+              </View>
+            )}
 
             {/* Email */}
             <View style={styles.emailRow}>

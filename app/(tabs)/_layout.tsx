@@ -6,7 +6,6 @@ import { Colors } from '../../src/constants/colors';
 import { useApp } from '../../src/context/AppContext';
 import { THEMES } from '../../src/constants/theme';
 import { AIAssistantModal } from '../../src/components/AIAssistantModal';
-import { FloatingChatButton } from '../../src/components/FloatingChatButton';
 import { triggerHaptic } from '../../src/lib/haptics';
 
 export default function TabLayout() {

@@ -21,7 +21,7 @@ import {
 import { AppThemeKey } from '../constants/theme';
 import { runMultiModelAI, AIContextData, AIEngineResult } from '../lib/aiAgentEngine';
 import { generateVoiceToneWav } from '../lib/audioVoiceRecorder';
-import { triggerDeviceNotification } from '../lib/deviceNotifications';
+import { triggerDeviceNotification, requestNotificationPermissions } from '../lib/deviceNotifications';
 import { CONFIG } from '../constants/config';
 
 /**
@@ -718,11 +718,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Background Cloud Sync & Auto-Refresh Polling (Multi-Device Real-Time Sync)
   useEffect(() => {
-    if (!user) return;
+    if (!user || isLoading) return;
 
-    // Initial two-way merge on login
+    // Request OS Push / Notification permissions on device
+    requestNotificationPermissions().catch(() => {});
+
+    // Initial two-way merge on startup / login (filtering out any old corrupted dummy teams)
+    const validTeams = teams.filter((t) => t.owner_id !== 'leader_remote');
     syncCloudState('MERGE', {
-      teams,
+      teams: validTeams,
       members,
       tasks,
       chatMessages,
@@ -731,7 +735,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       users,
     });
 
-    // Auto-refresh interval (every 6 seconds) so leaders & members see updates in real-time
+    // Auto-refresh interval (every 4 seconds) so leaders & members see updates in real-time
     const pollTimer = setInterval(async () => {
       try {
         const res = await fetch(`${CONFIG.SYNC_API_URL}?t=${Date.now()}`);
@@ -742,10 +746,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           }
         }
       } catch (_) {}
-    }, 6000);
+    }, 4000);
 
     return () => clearInterval(pollTimer);
-  }, [user]);
+  }, [user, isLoading]);
 
   // Log activity helper
   const logAction = useCallback((action: string, detail: string) => {
@@ -1108,16 +1112,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       profile: user,
     };
 
-    const updatedTeams = [...teams, newTeam];
-    const updatedMembers = [...members, newMember];
+    // Await Cloud Database creation so duplicate names across devices are strictly rejected
+    const cloudRes = await syncCloudState('CREATE_TEAM', { team: newTeam, member: newMember });
+    if (cloudRes && cloudRes.ok === false) {
+      return {
+        ok: false,
+        error: cloudRes.error || `Team name "${name}" is already registered. Please choose a different team name.`,
+      };
+    }
+
+    const updatedTeams = [...teams.filter((t) => t.id !== newTeam.id), newTeam];
+    const updatedMembers = [...members.filter((m) => !(m.team_id === teamId && m.user_id === user.id)), newMember];
 
     setTeams(updatedTeams);
     setMembers(updatedMembers);
     await persist(STORE_KEYS.TEAMS, updatedTeams);
     await persist(STORE_KEYS.MEMBERS, updatedMembers);
-
-    // Sync to Cloud Database for instant multi-device visibility
-    syncCloudState('CREATE_TEAM', { team: newTeam, member: newMember }).catch(() => {});
 
     logAction('create_team', `Created team "${name}" as Leader`);
     return { ok: true, team: newTeam };
@@ -1132,139 +1142,68 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const cleanCode = input.inviteCode.trim().toUpperCase();
     const cleanPass = input.joinPassword.trim();
 
-    if (!cleanName) return { ok: false, error: 'Team name is required' };
-    if (!cleanCode) return { ok: false, error: '6-digit invite code is required' };
+    if (!cleanName && !cleanCode) return { ok: false, error: 'Team name or 6-digit invite code is required' };
     if (!cleanPass) return { ok: false, error: 'Team access password is required' };
 
-    // 1. Primary lookup: Match by unique 6-digit invite code
+    // 1. Direct Cloud Lookup & Join Request via Serverless API
+    const cloudRes = await syncCloudState('REQUEST_JOIN', {
+      teamName: cleanName,
+      inviteCode: cleanCode,
+      joinPassword: cleanPass,
+      user,
+    });
+
+    if (cloudRes) {
+      if (!cloudRes.ok) {
+        return { ok: false, error: cloudRes.error || 'Failed to join team' };
+      }
+
+      if (cloudRes.team) {
+        const targetTeam = cloudRes.team;
+        // Clean out any old dummy teams with leader_remote and save the verified cloud team
+        setTeams((prev) => {
+          const filtered = prev.filter((t) => t.id !== targetTeam.id && t.owner_id !== 'leader_remote');
+          const updated = [...filtered, targetTeam];
+          persist(STORE_KEYS.TEAMS, updated);
+          return updated;
+        });
+
+        if (cloudRes.alreadyMember) {
+          return { ok: true, team: targetTeam };
+        }
+
+        if (cloudRes.pendingApproval) {
+          return { ok: true, team: targetTeam, pendingApproval: true };
+        }
+
+        return { ok: true, team: targetTeam };
+      }
+    }
+
+    // 2. Offline Resilience: Match by existing local teams
     let targetTeam = teams.find(
-      (t) => t.invite_code && t.invite_code.trim().toUpperCase() === cleanCode
+      (t) => (t.invite_code && t.invite_code.trim().toUpperCase() === cleanCode) ||
+             (t.name && t.name.trim().toLowerCase() === cleanName.toLowerCase())
     );
 
-    // 2. Secondary lookup: Only if not found by invite code, match by exact name
     if (!targetTeam) {
-      targetTeam = teams.find(
-        (t) => t.name && t.name.trim().toLowerCase() === cleanName.toLowerCase()
-      );
-    }
-
-    if (targetTeam) {
-      const storedPass = (targetTeam.join_password || '').trim();
-      const enteredPass = cleanPass.trim();
-
-      // Verify password with whitespace trimming & case tolerance
-      if (storedPass && storedPass !== enteredPass && storedPass.toLowerCase() !== enteredPass.toLowerCase()) {
-        return { ok: false, error: 'Team access password is incorrect. Please check the password provided by your Team Leader.' };
-      }
-    } else {
-      // 2. Cross-Device / Cloudless Sync:
-      // Team was created on another device (e.g. Web or APK)
-      if (cleanPass.length < 4) {
-        return { ok: false, error: 'Team password must be at least 4 characters' };
-      }
-
-      // Materialize team locally so member can access workspace immediately
-      targetTeam = {
-        id: `team_${cleanCode.toLowerCase()}`,
-        name: cleanName,
-        invite_code: cleanCode,
-        join_password: cleanPass,
-        owner_id: 'leader_remote',
-        created_at: new Date().toISOString(),
+      return {
+        ok: false,
+        error: `Workspace not found. Please verify the 6-digit invite code (${cleanCode}) or check your internet connection.`,
       };
-
-      const updatedTeams = [...teams, targetTeam];
-      setTeams(updatedTeams);
-      await persist(STORE_KEYS.TEAMS, updatedTeams);
     }
 
-    // 3. Check if user is already a member
+    const storedPass = (targetTeam.join_password || '').trim();
+    if (storedPass && storedPass !== cleanPass && storedPass.toLowerCase() !== cleanPass.toLowerCase()) {
+      return { ok: false, error: 'Team access password is incorrect. Please check the password provided by your Team Leader.' };
+    }
+
     const alreadyMember = members.some((m) => m.team_id === targetTeam.id && m.user_id === user.id);
     if (alreadyMember) {
       return { ok: true, team: targetTeam };
     }
 
-    // 4. Team Member Approval Flow:
-    // If user is not the team creator, create a pending Join Request for Team Leader approval
-    if (targetTeam.owner_id !== user.id) {
-      const existingReq = joinRequests.find(
-        (r) => r.team_id === targetTeam.id && r.user_id === user.id && r.status === 'pending'
-      );
-      if (existingReq) {
-        return { ok: true, team: targetTeam, error: 'Your join request is already pending Leader approval.' };
-      }
-
-      const newReq: JoinRequest = {
-        id: `req_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-        team_id: targetTeam.id,
-        user_id: user.id,
-        status: 'pending',
-        created_at: new Date().toISOString(),
-        profile: user,
-        team: targetTeam,
-      };
-
-      const updatedRequests = [newReq, ...joinRequests];
-      setJoinRequests(updatedRequests);
-      await persist(STORE_KEYS.JOIN_REQUESTS, updatedRequests);
-
-      // Create notification for team leader
-      const leaderNotif: AppNotification = {
-        id: `notif_${Date.now()}`,
-        user_id: targetTeam.owner_id,
-        kind: 'join_request',
-        title: 'New Member Join Request',
-        body: `${user.name} (@${user.username || 'member'}) has requested to join "${targetTeam.name}"`,
-        read: false,
-        related_join_request_id: newReq.id,
-        created_at: new Date().toISOString(),
-      };
-      setNotifications((prev) => {
-        const updated = [leaderNotif, ...prev];
-        persist(STORE_KEYS.NOTIFICATIONS, updated);
-        return updated;
-      });
-
-      triggerDeviceNotification({
-        title: 'New Member Join Request',
-        body: `${user.name} requested to join "${targetTeam.name}"`,
-      });
-
-      logAction('request_join', `Requested to join "${targetTeam.name}" (Code: ${cleanCode})`);
-
-      // Push to Cloud Database so Leader receives approval request in real time
-      syncCloudState('REQUEST_JOIN', {
-        teamName: cleanName,
-        inviteCode: cleanCode,
-        joinPassword: cleanPass,
-        user,
-      }).catch(() => {});
-
-      return { ok: true, team: targetTeam, pendingApproval: true };
-    }
-
-    // 5. If user created the team (or is owner): directly add as owner
-    const newMember: TeamMember = {
-      id: `member_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-      team_id: targetTeam.id,
-      user_id: user.id,
-      role: 'owner',
-      joined_at: new Date().toISOString(),
-      profile: user,
-    };
-
-    const updatedMembers = [...members, newMember];
-    setMembers(updatedMembers);
-    await persist(STORE_KEYS.MEMBERS, updatedMembers);
-
-    if (!users.some((u) => u.id === user.id)) {
-      const updatedUsers = [...users, user];
-      setUsers(updatedUsers);
-      await persist(STORE_KEYS.ALL_USERS, updatedUsers);
-    }
-
-    logAction('join_team', `Joined team "${targetTeam.name}" (Code: ${cleanCode})`);
-    return { ok: true, team: targetTeam };
+    return { ok: true, team: targetTeam, pendingApproval: true };
   };
 
   const approveJoinRequest = async (requestId: string) => {
@@ -1429,6 +1368,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     await persist(STORE_KEYS.MEMBERS, updatedMembers);
     await persist(STORE_KEYS.TASKS, updatedTasks);
 
+    syncCloudState('DELETE_TEAM', { teamId }).catch(() => {});
+
     logAction('delete_team', `Deleted team "${teamName}"`);
     return { ok: true };
   };
@@ -1519,6 +1460,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       title: 'Teammate Left',
       body: `${user.name} left "${teamName}"`,
     });
+
+    syncCloudState('LEAVE_TEAM', { teamId, userId: user.id, userName: user.name }).catch(() => {});
 
     logAction('leave_team', `Left team "${teamName}"`);
     return { ok: true };
@@ -1778,6 +1721,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const updateTask = async (taskId: string, patch: Partial<Task>) => {
+    if (!user) return { ok: false, error: 'Must be logged in' };
+    const task = tasks.find((t) => t.id === taskId);
+    if (!task) return { ok: false, error: 'Task not found' };
+
+    // Authorization: Only Leader / Admin of that team or Creator or App Owner can edit task definitions
+    const isLeaderOrAdmin = canManageTeam(task.team_id ?? '') || task.created_by_id === user.id || isAppOwner(user);
+
+    // If assigned member tries to modify core details, reject!
+    if (!isLeaderOrAdmin) {
+      if (
+        patch.title !== undefined ||
+        patch.description !== undefined ||
+        patch.assignee_id !== undefined ||
+        patch.priority !== undefined ||
+        patch.due_date !== undefined ||
+        patch.assigned_date !== undefined
+      ) {
+        return {
+          ok: false,
+          error: 'Permission Denied: Only Team Leader or Admin can modify task details.',
+        };
+      }
+    }
+
     const updatedTasks = tasks.map((t) =>
       t.id === taskId ? { ...t, ...patch, updated_at: new Date().toISOString() } : t
     );
@@ -1790,6 +1757,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const deleteTask = async (taskId: string) => {
+    if (!user) return { ok: false, error: 'Must be logged in' };
+    const task = tasks.find((t) => t.id === taskId);
+    if (!task) return { ok: false, error: 'Task not found' };
+
+    const isLeaderOrAdmin = canManageTeam(task.team_id ?? '') || task.created_by_id === user.id || isAppOwner(user);
+    if (!isLeaderOrAdmin) {
+      return {
+        ok: false,
+        error: 'Permission Denied: Only Team Leader or Admin can delete tasks.',
+      };
+    }
+
     const updatedTasks = tasks.filter((t) => t.id !== taskId);
     const updatedSubtasks = subtasks.filter((s) => s.task_id !== taskId);
     setTasks(updatedTasks);

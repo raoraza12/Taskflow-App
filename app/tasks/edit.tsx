@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { StyleSheet, View, Text, Pressable, ScrollView, TouchableOpacity } from 'react-native';
 import { showAlert } from '../../src/lib/alerts';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useApp } from '../../src/context/AppContext';
+import { useApp, isAppOwner } from '../../src/context/AppContext';
 import { Colors, Radius, Spacing, Typography } from '../../src/constants/colors';
 import { ScreenWrapper } from '../../src/components/ScreenWrapper';
 import { Button } from '../../src/components/Button';
@@ -112,8 +112,8 @@ export default function EditTaskScreen() {
     return list;
   }, [rawMembers, users]);
   const isAssignee = task.assignee_id === user?.id;
-  // Only team leader/admin/owner can edit & delete tasks; assignees can only submit for review
-  const canEditOrDelete = canManageTeam(task.team_id ?? '') || task.created_by_id === user?.id;
+  // Only team leader/admin/owner or super admin can edit & delete tasks; assignees can only submit for review
+  const canEditOrDelete = canManageTeam(task.team_id ?? '') || task.created_by_id === user?.id || isAppOwner(user);
 
   const handleSave = async () => {
     if (!title.trim()) {
@@ -184,7 +184,11 @@ export default function EditTaskScreen() {
   };
 
   return (
-    <ScreenWrapper title="Edit Task" subtitle="Modify Ticket, Assignee & Subtasks" showBack>
+    <ScreenWrapper
+      title={canEditOrDelete ? 'Edit Task' : 'Task Details'}
+      subtitle={canEditOrDelete ? 'Modify Ticket, Assignee & Subtasks' : 'Assigned Teammate Workspace'}
+      showBack
+    >
       {/* Read-only notification banner for team members */}
       {!canEditOrDelete && (
         <View style={styles.readOnlyBanner}>
@@ -452,20 +456,22 @@ export default function EditTaskScreen() {
         <Ionicons name="checkbox" size={16} color={currentTheme.colors.primary} />
         <Text style={[styles.sectionLabel, { color: currentTheme.colors.text }]}>Subtasks Checklist</Text>
       </View>
-      <View style={styles.subtaskInputRow}>
-        <Input
-          placeholder="New checklist item..."
-          value={subtaskInput}
-          onChangeText={setSubtaskInput}
-          containerStyle={{ flex: 1, marginBottom: 0 }}
-        />
-        <Button
-          title="+ Add"
-          size="sm"
-          onPress={handleAddSubtaskItem}
-          style={{ marginLeft: Spacing.sm }}
-        />
-      </View>
+      {canEditOrDelete && (
+        <View style={styles.subtaskInputRow}>
+          <Input
+            placeholder="New checklist item..."
+            value={subtaskInput}
+            onChangeText={setSubtaskInput}
+            containerStyle={{ flex: 1, marginBottom: 0 }}
+          />
+          <Button
+            title="+ Add"
+            size="sm"
+            onPress={handleAddSubtaskItem}
+            style={{ marginLeft: Spacing.sm }}
+          />
+        </View>
+      )}
 
       {task.subtasks?.map((st) => (
         <Card
@@ -497,9 +503,11 @@ export default function EditTaskScreen() {
               {st.title}
             </Text>
           </Pressable>
-          <TouchableOpacity onPress={() => deleteSubtask(st.id)}>
-            <Ionicons name="trash-outline" size={18} color={currentTheme.colors.danger} />
-          </TouchableOpacity>
+          {canEditOrDelete && (
+            <TouchableOpacity onPress={() => deleteSubtask(st.id)}>
+              <Ionicons name="trash-outline" size={18} color={currentTheme.colors.danger} />
+            </TouchableOpacity>
+          )}
         </Card>
       ))}
 

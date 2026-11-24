@@ -10,6 +10,16 @@ try {
       shouldSetBadge: true,
     }),
   });
+
+  if (Platform.OS === 'android') {
+    Notifications.setNotificationChannelAsync('default', {
+      name: 'TaskFlow Alerts',
+      importance: Notifications.AndroidImportance.MAX,
+      vibrationPattern: [0, 250, 250, 250],
+      lightColor: '#4f46e5',
+      sound: 'default',
+    });
+  }
 } catch (e) {
   // Suppress in testing / SSR environments
 }
@@ -66,7 +76,8 @@ export async function triggerDeviceNotification(input: {
         body: input.body,
         data: input.data || {},
         sound: true,
-      },
+        ...(Platform.OS === 'android' ? { channelId: 'default' } : {}),
+      } as any,
       trigger: null, // deliver immediately
     });
   } catch (err) {

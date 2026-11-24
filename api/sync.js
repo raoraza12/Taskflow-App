@@ -70,7 +70,15 @@ module.exports = async function handler(req, res) {
     }
 
     if (req.method === 'POST') {
-      const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body || {};
+      let body = req.body;
+      if (typeof body === 'string') {
+        try {
+          body = JSON.parse(body);
+        } catch (e) {
+          body = {};
+        }
+      }
+      body = body || {};
       const { action, payload } = body;
       const state = await getCloudState();
 
@@ -297,6 +305,34 @@ module.exports = async function handler(req, res) {
       if (action === 'DELETE_TASK') {
         const { taskId } = payload || {};
         state.tasks = state.tasks.filter((t) => t.id !== taskId);
+        await saveCloudState(state);
+        return res.status(200).json({ ok: true, state });
+      }
+
+      if (action === 'LEAVE_TEAM') {
+        const { teamId, userId, userName } = payload || {};
+        state.members = state.members.filter((m) => !(m.team_id === teamId && m.user_id === userId));
+        const announcement = {
+          id: `msg_leave_${Date.now()}`,
+          team_id: teamId,
+          user_id: 'system',
+          user_name: 'TaskFlow Bot',
+          user_avatar: '',
+          text: `👋 ${userName || 'A member'} has left the team.`,
+          created_at: new Date().toISOString(),
+        };
+        state.chatMessages = [...state.chatMessages, announcement];
+        await saveCloudState(state);
+        return res.status(200).json({ ok: true, state });
+      }
+
+      if (action === 'DELETE_TEAM') {
+        const { teamId } = payload || {};
+        state.teams = state.teams.filter((t) => t.id !== teamId);
+        state.members = state.members.filter((m) => m.team_id !== teamId);
+        state.tasks = state.tasks.filter((t) => t.team_id !== teamId);
+        state.joinRequests = state.joinRequests.filter((r) => r.team_id !== teamId);
+        state.chatMessages = state.chatMessages.filter((m) => m.team_id !== teamId);
         await saveCloudState(state);
         return res.status(200).json({ ok: true, state });
       }
