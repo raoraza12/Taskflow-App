@@ -22,6 +22,7 @@ import { AppThemeKey } from '../constants/theme';
 import { runMultiModelAI, AIContextData, AIEngineResult } from '../lib/aiAgentEngine';
 import { generateVoiceToneWav } from '../lib/audioVoiceRecorder';
 import { triggerDeviceNotification } from '../lib/deviceNotifications';
+import { CONFIG } from '../constants/config';
 
 /**
  * Strict Super Admin & App Ownership Check:
@@ -613,6 +614,139 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     await secureSet(key, JSON.stringify(data));
   }, []);
 
+  const applyCloudState = useCallback(
+    (state: any) => {
+      if (!state) return;
+      if (Array.isArray(state.teams) && state.teams.length > 0) {
+        setTeams((prev) => {
+          const map = new Map<string, Team>();
+          prev.forEach((t) => map.set(t.id, t));
+          state.teams.forEach((t: Team) => map.set(t.id, t));
+          const merged = Array.from(map.values());
+          persist(STORE_KEYS.TEAMS, merged);
+          return merged;
+        });
+      }
+      if (Array.isArray(state.members) && state.members.length > 0) {
+        setMembers((prev) => {
+          const map = new Map<string, TeamMember>();
+          prev.forEach((m) => map.set(`${m.team_id}_${m.user_id}`, m));
+          state.members.forEach((m: TeamMember) => map.set(`${m.team_id}_${m.user_id}`, m));
+          const merged = Array.from(map.values());
+          persist(STORE_KEYS.MEMBERS, merged);
+          return merged;
+        });
+      }
+      if (Array.isArray(state.tasks)) {
+        setTasks((prev) => {
+          const map = new Map<string, Task>();
+          prev.forEach((t) => map.set(t.id, t));
+          state.tasks.forEach((t: Task) => map.set(t.id, t));
+          const merged = Array.from(map.values());
+          persist(STORE_KEYS.TASKS, merged);
+          return merged;
+        });
+      }
+      if (Array.isArray(state.chatMessages)) {
+        setChatMessages((prev) => {
+          const map = new Map<string, ChatMessage>();
+          prev.forEach((m) => map.set(m.id, m));
+          state.chatMessages.forEach((m: ChatMessage) => map.set(m.id, m));
+          const merged = Array.from(map.values()).sort(
+            (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+          );
+          persist(STORE_KEYS.CHAT_MESSAGES, merged);
+          return merged;
+        });
+      }
+      if (Array.isArray(state.joinRequests)) {
+        setJoinRequests((prev) => {
+          const map = new Map<string, JoinRequest>();
+          prev.forEach((r) => map.set(r.id, r));
+          state.joinRequests.forEach((r: JoinRequest) => map.set(r.id, r));
+          const merged = Array.from(map.values());
+          persist(STORE_KEYS.JOIN_REQUESTS, merged);
+          return merged;
+        });
+      }
+      if (Array.isArray(state.connections)) {
+        setConnections((prev) => {
+          const map = new Map<string, TeammateConnection>();
+          prev.forEach((c) => map.set(c.id, c));
+          state.connections.forEach((c: TeammateConnection) => map.set(c.id, c));
+          const merged = Array.from(map.values());
+          persist(STORE_KEYS.CONNECTIONS, merged);
+          return merged;
+        });
+      }
+      if (Array.isArray(state.users)) {
+        setUsers((prev) => {
+          const map = new Map<string, Profile>();
+          prev.forEach((u) => map.set(u.id, u));
+          state.users.forEach((u: Profile) => map.set(u.id, u));
+          const merged = Array.from(map.values());
+          persist(STORE_KEYS.ALL_USERS, merged);
+          return merged;
+        });
+      }
+    },
+    [persist]
+  );
+
+  const syncCloudState = useCallback(
+    async (action?: string, payload?: any) => {
+      try {
+        const response = await fetch(CONFIG.SYNC_API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: action || 'MERGE', payload: payload || {} }),
+        });
+        if (response.ok) {
+          const data = await response.json();
+          if (data && data.state) {
+            applyCloudState(data.state);
+          }
+          return data;
+        }
+      } catch (_) {
+        // Offline resilience
+      }
+      return null;
+    },
+    [applyCloudState]
+  );
+
+  // Background Cloud Sync & Auto-Refresh Polling (Multi-Device Real-Time Sync)
+  useEffect(() => {
+    if (!user) return;
+
+    // Initial two-way merge on login
+    syncCloudState('MERGE', {
+      teams,
+      members,
+      tasks,
+      chatMessages,
+      joinRequests,
+      connections,
+      users,
+    });
+
+    // Auto-refresh interval (every 6 seconds) so leaders & members see updates in real-time
+    const pollTimer = setInterval(async () => {
+      try {
+        const res = await fetch(`${CONFIG.SYNC_API_URL}?t=${Date.now()}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.state) {
+            applyCloudState(data.state);
+          }
+        }
+      } catch (_) {}
+    }, 6000);
+
+    return () => clearInterval(pollTimer);
+  }, [user]);
+
   // Log activity helper
   const logAction = useCallback((action: string, detail: string) => {
     if (!user) return;
@@ -982,6 +1116,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     await persist(STORE_KEYS.TEAMS, updatedTeams);
     await persist(STORE_KEYS.MEMBERS, updatedMembers);
 
+    // Sync to Cloud Database for instant multi-device visibility
+    syncCloudState('CREATE_TEAM', { team: newTeam, member: newMember }).catch(() => {});
+
     logAction('create_team', `Created team "${name}" as Leader`);
     return { ok: true, team: newTeam };
   };
@@ -1094,6 +1231,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
 
       logAction('request_join', `Requested to join "${targetTeam.name}" (Code: ${cleanCode})`);
+
+      // Push to Cloud Database so Leader receives approval request in real time
+      syncCloudState('REQUEST_JOIN', {
+        teamName: cleanName,
+        inviteCode: cleanCode,
+        joinPassword: cleanPass,
+        user,
+      }).catch(() => {});
+
       return { ok: true, team: targetTeam, pendingApproval: true };
     }
 
@@ -1197,6 +1343,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }).catch(() => {});
 
     logAction('approve_join', `Approved join request for ${requester?.name || 'user'}`);
+    syncCloudState('APPROVE_JOIN', { requestId }).catch(() => {});
     return { ok: true };
   };
 
@@ -1209,6 +1356,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
     setJoinRequests(updatedRequests);
     await persist(STORE_KEYS.JOIN_REQUESTS, updatedRequests);
+    syncCloudState('DECLINE_JOIN', { requestId }).catch(() => {});
     return { ok: true };
   };
 
@@ -1548,6 +1696,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const updatedTasks = [newTask, ...tasks];
     setTasks(updatedTasks);
     await persist(STORE_KEYS.TASKS, updatedTasks);
+    syncCloudState('SAVE_TASK', { task: newTask }).catch(() => {});
 
     // Notify assignee if assigned to someone else
     if (newTask.assignee_id !== user.id) {
@@ -1596,6 +1745,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
     setTasks(updatedTasks);
     await persist(STORE_KEYS.TASKS, updatedTasks);
+    const submittedTask = updatedTasks.find((t) => t.id === taskId);
+    if (submittedTask) syncCloudState('SAVE_TASK', { task: submittedTask }).catch(() => {});
 
     // Determine who to notify (Task Creator or Team Owner)
     const targetUserId = task.created_by_id !== user.id ? task.created_by_id : null;
@@ -1632,6 +1783,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
     setTasks(updatedTasks);
     await persist(STORE_KEYS.TASKS, updatedTasks);
+    const submittedTask = updatedTasks.find((t) => t.id === taskId);
+    if (submittedTask) syncCloudState('SAVE_TASK', { task: submittedTask }).catch(() => {});
     logAction('update_task', `Updated task details`);
     return { ok: true };
   };
@@ -1643,6 +1796,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setSubtasks(updatedSubtasks);
     await persist(STORE_KEYS.TASKS, updatedTasks);
     await persist(STORE_KEYS.SUBTASKS, updatedSubtasks);
+    syncCloudState('DELETE_TASK', { taskId }).catch(() => {});
     logAction('delete_task', 'Deleted task');
     return { ok: true };
   };
@@ -1842,6 +1996,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setChatMessages((prev) => {
         const updated = [...prev, newMsg];
         persist(STORE_KEYS.CHAT_MESSAGES, updated);
+        syncCloudState('SEND_MESSAGE', { message: newMsg }).catch(() => {});
         return updated;
       });
 
