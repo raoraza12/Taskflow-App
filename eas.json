@@ -24,14 +24,6 @@
       }
     }
   },
-  "update": {
-    "preview": {
-      "branch": "preview"
-    },
-    "production": {
-      "branch": "production"
-    }
-  },
   "submit": {
     "production": {}
   }
