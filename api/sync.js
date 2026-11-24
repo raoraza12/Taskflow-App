@@ -48,6 +48,7 @@ async function saveCloudState(state) {
   await put(BLOB_FILENAME, jsonStr, {
     access: 'public',
     addRandomSuffix: false,
+    allowOverwrite: true,
     contentType: 'application/json',
   });
   return state;
