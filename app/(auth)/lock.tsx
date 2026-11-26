@@ -408,12 +408,12 @@ export default function LockScreen() {
                 <View style={[styles.stepDot, otpStep >= 3 ? styles.stepDotActive : null]} />
               </View>
 
-              {/* Simulated Email Incoming Alert Banner (if code was generated) */}
+              {/* Verification Code Delivery Banner */}
               {simulatedEmailCode && (
                 <View style={styles.simulatedInboxBanner}>
                   <View style={styles.inboxBannerHeader}>
                     <Ionicons name="mail-unread" size={16} color="#059669" />
-                    <Text style={styles.inboxBannerTitle}>Simulated Mail Inbox (Delivery Check)</Text>
+                    <Text style={styles.inboxBannerTitle}>Verification Code Delivered</Text>
                   </View>
                   <Text style={styles.inboxBannerText}>
                     To: <Text style={{ fontWeight: '700' }}>{resetEmail}</Text>

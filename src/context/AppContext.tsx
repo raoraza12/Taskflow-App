@@ -21,8 +21,7 @@ import {
 } from '../types/database';
 import { AppThemeKey } from '../constants/theme';
 import { runMultiModelAI, AIContextData, AIEngineResult } from '../lib/aiAgentEngine';
-import { generateVoiceToneWav } from '../lib/audioVoiceRecorder';
-import { triggerDeviceNotification, requestNotificationPermissions } from '../lib/deviceNotifications';
+import { triggerDeviceNotification, requestNotificationPermissions, registerForExpoPushToken } from '../lib/deviceNotifications';
 import { uploadCloudMedia } from '../lib/cloudMedia';
 import { CONFIG } from '../constants/config';
 
@@ -261,6 +260,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const deletedIdsRef = useRef<DeletedIdsState>(EMPTY_DELETED_IDS);
   const notifiedIdsRef = useRef<Set<string>>(new Set());
+  const notifiedChatIdsRef = useRef<Set<string>>(new Set());
   const currentUserRef = useRef<Profile | null>(null);
   currentUserRef.current = user;
 
@@ -335,70 +335,39 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       setThemeState('snow');
 
-      // Preloaded seed data for teams and users
-      const SEED_USERS: Profile[] = [
-        {
-          id: 'user_seed_ali',
-          google_id: 'seed_google_ali',
-          name: 'Ali Raza',
-          username: 'ali_lead',
-          email: 'aliraza.lead@gmail.com',
-          email_verified: true,
-          created_at: '2026-11-01T08:00:00.000Z',
-          isAdmin: true,
-          status: 'active',
-        },
-        {
-          id: 'user_seed_sarah',
-          google_id: 'seed_google_sarah',
-          name: 'Sarah Khan',
-          username: 'sarah_ui',
-          email: 'sarah.khan.design@gmail.com',
-          email_verified: true,
-          created_at: '2026-11-02T09:00:00.000Z',
-          isAdmin: false,
-          status: 'active',
-        },
-        {
-          id: 'user_seed_hamza',
-          google_id: 'seed_google_hamza',
-          name: 'Hamza Ahmed',
-          username: 'hamza_dev',
-          email: 'hamza.code@gmail.com',
-          email_verified: true,
-          created_at: '2026-11-03T10:00:00.000Z',
-          isAdmin: false,
-          status: 'active',
-        },
-        {
-          id: 'user_seed_zainab',
-          google_id: 'seed_google_zainab',
-          name: 'Zainab Malik',
-          username: 'zainab_pm',
-          email: 'zainab.pm@gmail.com',
-          email_verified: true,
-          created_at: '2026-11-04T11:00:00.000Z',
-          isAdmin: false,
-          status: 'active',
-        },
-      ];
+      // Purge any legacy seed/test fixtures from device storage so only real workspace data persists
+      const LEGACY_TEAM_IDS = new Set(['team_sprint_alpha', 'team_test1', 'team_7dp9vu']);
+      const LEGACY_USER_IDS = new Set([
+        'user_1',
+        'user_friend_1',
+        'user_seed_ali',
+        'user_seed_sarah',
+        'user_seed_hamza',
+        'user_seed_zainab',
+      ]);
 
       const rawUsers = await secureGet(STORE_KEYS.ALL_USERS);
       let loadedUsers: Profile[] = [];
       if (rawUsers) {
         const parsed: Profile[] = JSON.parse(rawUsers);
-        // Ensure every user has a unique username and ONLY the owner has admin rights
-        loadedUsers = parsed.map((u, idx) => {
-          const owner = isAppOwner(u);
-          if (!u.username) {
-            const base = (u.name || u.email.split('@')[0]).toLowerCase().replace(/[^a-z0-9_]/g, '_');
-            return { ...u, username: `${base}_${idx + 1}`, isAdmin: owner };
-          }
-          return { ...u, isAdmin: owner };
-        });
-      } else {
-        loadedUsers = SEED_USERS;
-        await secureSet(STORE_KEYS.ALL_USERS, JSON.stringify(SEED_USERS));
+        loadedUsers = parsed
+          .filter(
+            (u) =>
+              u &&
+              !LEGACY_USER_IDS.has(u.id) &&
+              u.email?.toLowerCase() !== 'zohaib@example.com'
+          )
+          .map((u, idx) => {
+            const owner = isAppOwner(u);
+            if (!u.username) {
+              const base = (u.name || u.email.split('@')[0]).toLowerCase().replace(/[^a-z0-9_]/g, '_');
+              return { ...u, username: `${base}_${idx + 1}`, isAdmin: owner };
+            }
+            return { ...u, isAdmin: owner };
+          });
+        if (loadedUsers.length !== parsed.length) {
+          await secureSet(STORE_KEYS.ALL_USERS, JSON.stringify(loadedUsers));
+        }
       }
       setUsers(loadedUsers);
 
@@ -406,88 +375,58 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (savedUser) {
         try {
           const parsed = JSON.parse(savedUser);
-          if (!parsed.username) {
-            parsed.username = (parsed.name || parsed.email.split('@')[0]).toLowerCase().replace(/[^a-z0-9_]/g, '_');
+          if (parsed && LEGACY_USER_IDS.has(parsed.id) && parsed.email !== 'aliraza.lead@gmail.com') {
+            await secureSet(STORE_KEYS.USER, '');
+          } else if (parsed && parsed.email) {
+            if (!parsed.username) {
+              parsed.username = (parsed.name || parsed.email.split('@')[0]).toLowerCase().replace(/[^a-z0-9_]/g, '_');
+            }
+            parsed.isAdmin = isAppOwner(parsed);
+            setUser(parsed);
           }
-          parsed.isAdmin = isAppOwner(parsed);
-          setUser(parsed);
         } catch {}
       }
 
-      const defaultPasswords: Record<string, string> = {
-        'aliraza.lead@gmail.com': 'admin1234',
-        'sarah.khan.design@gmail.com': 'sarah1234',
-        'hamza.code@gmail.com': 'hamza1234',
-        'zainab.pm@gmail.com': 'zainab1234',
-      };
       const rawPasswords = await secureGet(STORE_KEYS.USER_PASSWORDS);
       if (rawPasswords) {
         setUserPasswords(JSON.parse(rawPasswords));
-      } else {
-        setUserPasswords(defaultPasswords);
-        await secureSet(STORE_KEYS.USER_PASSWORDS, JSON.stringify(defaultPasswords));
       }
 
       const rawTeams = await secureGet(STORE_KEYS.TEAMS);
       if (rawTeams) {
-        setTeams(JSON.parse(rawTeams));
-      } else {
-        const defaultTeam: Team = {
-          id: 'team_sprint_alpha',
-          name: 'Core Product & AI Sprint',
-          invite_code: 'SPRINT26',
-          join_password: 'team1234',
-          owner_id: 'user_seed_ali',
-          created_at: '2026-11-01T08:00:00.000Z',
-        };
-        setTeams([defaultTeam]);
-        await secureSet(STORE_KEYS.TEAMS, JSON.stringify([defaultTeam]));
+        const parsedTeams: Team[] = JSON.parse(rawTeams);
+        const cleanTeams = parsedTeams.filter(
+          (t) =>
+            t &&
+            !LEGACY_TEAM_IDS.has(t.id) &&
+            t.owner_id !== 'leader_remote' &&
+            t.name !== 'Core Product & AI Sprint' &&
+            t.name !== 'Test Team'
+        );
+        setTeams(cleanTeams);
+        if (cleanTeams.length !== parsedTeams.length) {
+          await secureSet(STORE_KEYS.TEAMS, JSON.stringify(cleanTeams));
+        }
       }
 
       const rawMembers = await secureGet(STORE_KEYS.MEMBERS);
       if (rawMembers) {
-        setMembers(JSON.parse(rawMembers));
-      } else {
-        const defaultMembers: TeamMember[] = [
-          {
-            id: 'mem_1',
-            team_id: 'team_sprint_alpha',
-            user_id: 'user_seed_ali',
-            role: 'owner',
-            joined_at: '2026-11-01T08:00:00.000Z',
-            profile: SEED_USERS[0],
-          },
-          {
-            id: 'mem_2',
-            team_id: 'team_sprint_alpha',
-            user_id: 'user_seed_sarah',
-            role: 'member',
-            joined_at: '2026-11-02T09:00:00.000Z',
-            profile: SEED_USERS[1],
-          },
-          {
-            id: 'mem_3',
-            team_id: 'team_sprint_alpha',
-            user_id: 'user_seed_hamza',
-            role: 'member',
-            joined_at: '2026-11-03T10:00:00.000Z',
-            profile: SEED_USERS[2],
-          },
-          {
-            id: 'mem_4',
-            team_id: 'team_sprint_alpha',
-            user_id: 'user_seed_zainab',
-            role: 'member',
-            joined_at: '2026-11-04T11:00:00.000Z',
-            profile: SEED_USERS[3],
-          },
-        ];
-        setMembers(defaultMembers);
-        await secureSet(STORE_KEYS.MEMBERS, JSON.stringify(defaultMembers));
+        const parsedMembers: TeamMember[] = JSON.parse(rawMembers);
+        const cleanMembers = parsedMembers.filter(
+          (m) => m && !LEGACY_TEAM_IDS.has(m.team_id) && !LEGACY_USER_IDS.has(m.user_id)
+        );
+        setMembers(cleanMembers);
+        if (cleanMembers.length !== parsedMembers.length) {
+          await secureSet(STORE_KEYS.MEMBERS, JSON.stringify(cleanMembers));
+        }
       }
 
       const rawTasks = await secureGet(STORE_KEYS.TASKS);
-      if (rawTasks) setTasks(JSON.parse(rawTasks));
+      if (rawTasks) {
+        const parsedTasks: Task[] = JSON.parse(rawTasks);
+        const cleanTasks = parsedTasks.filter((t) => t && !LEGACY_TEAM_IDS.has(t.team_id || ''));
+        setTasks(cleanTasks);
+      }
 
       const rawSubtasks = await secureGet(STORE_KEYS.SUBTASKS);
       if (rawSubtasks) setSubtasks(JSON.parse(rawSubtasks));
@@ -495,8 +434,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const rawNotifs = await secureGet(STORE_KEYS.NOTIFICATIONS);
       if (rawNotifs) {
         const parsedNotifs: AppNotification[] = JSON.parse(rawNotifs);
-        setNotifications(parsedNotifs);
-        parsedNotifs.forEach((n) => notifiedIdsRef.current.add(n.id));
+        const cleanNotifs = parsedNotifs.filter((n) => n && !LEGACY_USER_IDS.has(n.user_id));
+        setNotifications(cleanNotifs);
+        cleanNotifs.forEach((n) => notifiedIdsRef.current.add(n.id));
       }
 
       const rawDeleted = await secureGet(STORE_KEYS.DELETED_IDS);
@@ -519,55 +459,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (rawHistory) setHistory(JSON.parse(rawHistory));
 
       const rawRequests = await secureGet(STORE_KEYS.JOIN_REQUESTS);
-      if (rawRequests) setJoinRequests(JSON.parse(rawRequests));
+      if (rawRequests) {
+        const parsedReqs: JoinRequest[] = JSON.parse(rawRequests);
+        setJoinRequests(parsedReqs.filter((r) => r && !LEGACY_TEAM_IDS.has(r.team_id) && !LEGACY_USER_IDS.has(r.user_id)));
+      }
 
       const rawConnections = await secureGet(STORE_KEYS.CONNECTIONS);
       if (rawConnections) setConnections(JSON.parse(rawConnections));
 
       const rawChat = await secureGet(STORE_KEYS.CHAT_MESSAGES);
       if (rawChat) {
-        setChatMessages(JSON.parse(rawChat));
-      } else {
-        const seedChat: ChatMessage[] = [
-          {
-            id: 'msg_seed_1',
-            team_id: 'team_sprint_alpha',
-            user_id: 'user_seed_ali',
-            user_name: 'Ali Raza',
-            user_username: 'ali_lead',
-            text: 'Assalam-o-Alaikum team! Alpine White theme live ho chuki hai. @sarah_ui please icons aur micro-interactions review kar lena.',
-            type: 'text',
-            mentions: ['sarah_ui'],
-            created_at: new Date(Date.now() - 3600000 * 2).toISOString(),
-          },
-          {
-            id: 'msg_seed_2',
-            team_id: 'team_sprint_alpha',
-            user_id: 'user_seed_sarah',
-            user_name: 'Sarah Khan',
-            user_username: 'sarah_ui',
-            text: 'Voice note: Sprint UI review & animations update 🎙️',
-            type: 'voice',
-            voice_duration: 8,
-            audio_url: generateVoiceToneWav(6),
-            voice_waveform: [30, 55, 80, 45, 90, 70, 85, 100, 65, 40, 75, 90, 50, 30, 60, 40],
-            mentions: ['ali_lead'],
-            created_at: new Date(Date.now() - 3600000).toISOString(),
-          },
-          {
-            id: 'msg_seed_3',
-            team_id: 'team_sprint_alpha',
-            user_id: 'user_seed_hamza',
-            user_name: 'Hamza Ahmed',
-            user_username: 'hamza_dev',
-            text: '@ali_lead @zainab_pm AI Agent bot ready hai! Leader bol sakta hai "is banday ko yeh task assign krna" aur bot foran task bana dega!',
-            type: 'text',
-            mentions: ['ali_lead', 'zainab_pm'],
-            created_at: new Date(Date.now() - 1800000).toISOString(),
-          },
-        ];
-        setChatMessages(seedChat);
-        await secureSet(STORE_KEYS.CHAT_MESSAGES, JSON.stringify(seedChat));
+        const parsedChat: ChatMessage[] = JSON.parse(rawChat);
+        const cleanChat = parsedChat.filter(
+          (m) => m && !LEGACY_TEAM_IDS.has(m.team_id) && !String(m.id || '').startsWith('msg_seed_')
+        );
+        setChatMessages(cleanChat);
+        cleanChat.forEach((m) => notifiedChatIdsRef.current.add(m.id));
+        if (cleanChat.length !== parsedChat.length) {
+          await secureSet(STORE_KEYS.CHAT_MESSAGES, JSON.stringify(cleanChat));
+        }
       }
 
       const rawAi = await secureGet(STORE_KEYS.AI_MESSAGES);
@@ -577,7 +487,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const welcomeAi: AIAgentMessage = {
           id: 'ai_welcome_init',
           sender: 'assistant',
-          text: 'Assalam-o-Alaikum! Main TaskFlow ka Smart AI Agent hoon 🤖\n\nAap mujhse natural language mein task create ya kisi bhi member ko assign karwa sakte hain. Misal:\n• "Assign @sarah_ui high priority UI redesign task due today"\n• "Create task API Integration for @hamza_dev"\n• "Kaam ka status batao" ya "Complete UI task"\n\nBataiye main aapki kya madad karoon?',
+          text: 'Assalam-o-Alaikum! Main TaskFlow ka Smart AI Agent hoon 🤖\n\nAap mujhse natural language mein task create ya kisi bhi teammate ko assign karwa sakte hain. Misal:\n• "Assign @teammate high priority UI review task due today"\n• "Create task API Integration due tomorrow"\n• "Kaam ka status batao" ya "Complete UI task"\n\nBataiye main aapki kya madad karoon?',
           action_type: 'info',
           created_at: new Date().toISOString(),
         };
@@ -608,7 +518,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const userWelcome: AIAgentMessage = {
         id: `ai_init_${user.id}`,
         sender: 'assistant',
-        text: `Assalam-o-Alaikum, **${user.name}**! 👋\n\nMain TaskFlow ka Multi-Model AI Agent hoon. Mujhe aapke portal, team members, sprint tasks aur schedules ki complete knowledge hai.\n\nAap mujhse natural language mein koi bhi sawaal pooch sakte hain ya task assign karwa sakte hain.\n\n• *"Hamari team mein kaun kaun hai aur unke roles kya hain?"*\n• *"Mera aaj ka kya kaam due hai?"*\n• *"Assign task UI Review to @sarah_ui high priority due today"*`,
+        text: `Assalam-o-Alaikum, **${user.name}**! 👋\n\nMain TaskFlow ka Multi-Model AI Agent hoon. Mujhe aapke portal, team members, sprint tasks aur schedules ki complete knowledge hai.\n\nAap mujhse natural language mein koi bhi sawaal pooch sakte hain ya task assign karwa sakte hain.\n\n• *"Hamari team mein kaun kaun hai aur unke roles kya hain?"*\n• *"Mera aaj ka kya kaam due hai?"*\n• *"Create urgent task QA Review due today"*`,
         action_type: 'info',
         model_used: 'Gemini 1.5 Pro (Primary Neural)',
         created_at: new Date().toISOString(),
@@ -760,13 +670,43 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         });
       }
       if (Array.isArray(state.chatMessages)) {
+        const activeUserId = currentUserRef.current?.id;
+        const myTeamIdsSet = new Set(
+          (Array.isArray(state.members) ? state.members : latestSyncSnapshotRef.current.members)
+            .filter((m: TeamMember) => m && m.user_id === activeUserId)
+            .map((m: TeamMember) => m.team_id)
+        );
+        const teamsLookup: Team[] = Array.isArray(state.teams) ? state.teams : latestSyncSnapshotRef.current.teams;
+
+        state.chatMessages.forEach((m: ChatMessage) => {
+          if (
+            m &&
+            activeUserId &&
+            m.user_id !== activeUserId &&
+            m.user_id !== 'system' &&
+            !String(m.id || '').startsWith('msg_seed_') &&
+            myTeamIdsSet.has(m.team_id) &&
+            !notifiedChatIdsRef.current.has(m.id)
+          ) {
+            notifiedChatIdsRef.current.add(m.id);
+            const tName = teamsLookup.find((t) => t.id === m.team_id)?.name || 'Team Chat';
+            triggerDeviceNotification({
+              title: `💬 ${tName}`,
+              body: `${m.user_name}: ${m.type === 'voice' ? '🎤 Sent a voice note' : (m.text || '')}`,
+              data: { kind: 'chat_message', teamId: m.team_id },
+            }).catch(() => {});
+          } else if (m?.id) {
+            notifiedChatIdsRef.current.add(m.id);
+          }
+        });
+
         setChatMessages((prev) => {
           const map = new Map<string, ChatMessage>();
           prev.forEach((m) => {
-            if (!delTeams.has(m.team_id)) map.set(m.id, m);
+            if (!delTeams.has(m.team_id) && !String(m.id || '').startsWith('msg_seed_')) map.set(m.id, m);
           });
           state.chatMessages.forEach((m: ChatMessage) => {
-            if (m && !delTeams.has(m.team_id)) map.set(m.id, m);
+            if (m && !delTeams.has(m.team_id) && !String(m.id || '').startsWith('msg_seed_')) map.set(m.id, m);
           });
           const merged = Array.from(map.values())
             .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
@@ -804,7 +744,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         state.notifications.forEach((n: AppNotification) => {
           if (n && activeUserId && n.user_id === activeUserId && !n.read && !notifiedIdsRef.current.has(n.id)) {
             notifiedIdsRef.current.add(n.id);
-            triggerDeviceNotification({ title: n.title, body: n.body }).catch(() => {});
+            triggerDeviceNotification({
+              title: n.title,
+              body: n.body,
+              data: {
+                kind: n.kind,
+                taskId: n.related_task_id,
+                teamId: n.related_team_id,
+                joinRequestId: n.related_join_request_id,
+                connectionId: n.related_connection_id,
+              },
+            }).catch(() => {});
           }
         });
         setNotifications((prev) => {
@@ -942,6 +892,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     requestNotificationPermissions().catch(() => {});
+    registerForExpoPushToken()
+      .then((pushToken) => {
+        if (pushToken && user.expo_push_token !== pushToken) {
+          syncCloudState('REGISTER_PUSH_TOKEN', { userId: user.id, token: pushToken }).catch(() => {});
+        }
+      })
+      .catch(() => {});
 
     if (mergedUserIdRef.current !== user.id) {
       mergedUserIdRef.current = user.id;

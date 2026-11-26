@@ -6,10 +6,12 @@ import { ScreenWrapper } from '../../src/components/ScreenWrapper';
 import { Card } from '../../src/components/Card';
 import { Button } from '../../src/components/Button';
 import { Ionicons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
 import { THEMES } from '../../src/constants/theme';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 
 export default function NotificationsScreen() {
+  const router = useRouter();
   const {
     notifications,
     pendingJoinRequests,
@@ -112,7 +114,31 @@ export default function NotificationsScreen() {
                   />
                 </View>
 
-                <View style={styles.notifBody}>
+                <Pressable
+                  style={styles.notifBody}
+                  onPress={() => {
+                    if (!n.read) markNotificationRead(n.id);
+                    if (n.related_task_id) {
+                      router.push({ pathname: '/tasks/edit', params: { taskId: n.related_task_id } });
+                    } else if (n.kind === 'chat_mention' || n.kind === 'chat_message') {
+                      router.push({
+                        pathname: '/teams/chat',
+                        params: n.related_team_id ? { teamId: n.related_team_id } : undefined,
+                      });
+                    } else if (
+                      n.kind === 'join_request' ||
+                      n.kind === 'join_result' ||
+                      n.kind === 'team_joined' ||
+                      n.kind === 'team_left' ||
+                      n.kind === 'team_deleted' ||
+                      n.kind === 'member_removed' ||
+                      n.kind === 'teammate_request' ||
+                      n.kind === 'teammate_accepted'
+                    ) {
+                      router.push('/(tabs)/teams');
+                    }
+                  }}
+                >
                   <View style={styles.titleRow}>
                     <Text style={[styles.notifTitle, { color: currentTheme.colors.text }]}>{n.title}</Text>
                     {!n.read && <View style={[styles.unreadDot, { backgroundColor: currentTheme.colors.primary }]} />}
@@ -209,7 +235,7 @@ export default function NotificationsScreen() {
                       </View>
                     );
                   })()}
-                </View>
+                </Pressable>
 
                 {!n.read && (
                   <Pressable

@@ -1122,6 +1122,7 @@ async function runRealApiIntegrationSuite() {
   const originalFetch = global.fetch;
 
   const memBlobs = new Map();
+  const pushBatches = [];
   require.cache[blobModulePath] = {
     id: blobModulePath,
     filename: blobModulePath,
@@ -1143,8 +1144,13 @@ async function runRealApiIntegrationSuite() {
     },
   };
 
-  global.fetch = async (url) => {
+  global.fetch = async (url, init) => {
     const str = String(url);
+    if (str.includes('exp.host/--/api/v2/push/send')) {
+      const parsed = init && init.body ? JSON.parse(init.body) : [];
+      pushBatches.push(parsed);
+      return { ok: true, status: 200, json: async () => ({ data: [] }) };
+    }
     if (str.includes('taskflow_cloud_state.json')) {
       const entry = memBlobs.get('taskflow_cloud_state.json');
       if (entry) {
@@ -1406,6 +1412,72 @@ async function runRealApiIntegrationSuite() {
       });
       assert.strictEqual(up.status, 200);
       assert.ok(up.data.url.startsWith('https://blob.test/'));
+    });
+
+    await itAsync('REGISTER_PUSH_TOKEN + Task Approval & MERGE purge legacy test fixtures cleanly', async () => {
+      const regPush = await callApi('POST', {
+        action: 'REGISTER_PUSH_TOKEN',
+        payload: { userId: memberUser.id, token: 'ExponentPushToken[test_device_token_123]' },
+      });
+      assert.strictEqual(regPush.status, 200);
+      assert.strictEqual(
+        regPush.data.state.users.find((u) => u.id === memberUser.id).expo_push_token,
+        'ExponentPushToken[test_device_token_123]'
+      );
+
+      // Leader creates & then approves a task -> triggers remote push + Task Approved notification
+      const tNew = await callApi('POST', {
+        action: 'SAVE_TASK',
+        payload: {
+          actorId: leaderUser.id,
+          actorName: leaderUser.name,
+          task: {
+            id: 'task_push_1',
+            team_id: 't_1',
+            is_personal: false,
+            assignee_id: memberUser.id,
+            created_by_id: leaderUser.id,
+            title: 'Push Alert Check',
+            description: '',
+            status: 'submitted',
+            priority: 'high',
+            assigned_date: '2026-11-26',
+            due_date: '2026-11-27',
+            start_time: '09:00',
+            end_time: '18:00',
+            created_at: '2026-11-26T00:00:00Z',
+            updated_at: '2026-11-26T00:00:00Z',
+          },
+        },
+      });
+      assert.strictEqual(tNew.status, 200);
+
+      pushBatches.length = 0;
+      const tApprove = await callApi('POST', {
+        action: 'SAVE_TASK',
+        payload: {
+          actorId: leaderUser.id,
+          actorName: leaderUser.name,
+          task: { ...tNew.data.state.tasks.find((x) => x.id === 'task_push_1'), status: 'done' },
+        },
+      });
+      assert.strictEqual(tApprove.status, 200);
+      assert.ok(tApprove.data.state.notifications.some((n) => n.user_id === memberUser.id && n.title.includes('Task Approved')));
+      assert.ok(pushBatches.some((batch) => batch.some((p) => p.to === 'ExponentPushToken[test_device_token_123]' && p.title.includes('Task Approved'))));
+
+      // Verify legacy test/seed teams and users are purged even if sent in MERGE
+      const legacyMerge = await callApi('POST', {
+        action: 'MERGE',
+        payload: {
+          teams: [{ id: 'team_sprint_alpha', name: 'Core Product & AI Sprint', owner_id: 'user_seed_ali' }],
+          users: [{ id: 'user_seed_sarah', name: 'Sarah Khan', email: 'sarah.khan.design@gmail.com' }],
+          chatMessages: [{ id: 'msg_seed_1', team_id: 'team_sprint_alpha', user_id: 'user_seed_ali', text: 'old' }],
+        },
+      });
+      assert.strictEqual(legacyMerge.status, 200);
+      assert.ok(!legacyMerge.data.state.teams.some((t) => t.id === 'team_sprint_alpha'));
+      assert.ok(!legacyMerge.data.state.users.some((u) => u.id === 'user_seed_sarah'));
+      assert.ok(!legacyMerge.data.state.chatMessages.some((m) => m.id === 'msg_seed_1'));
     });
   } finally {
     if (originalBlobCache) require.cache[blobModulePath] = originalBlobCache;

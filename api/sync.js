@@ -7,6 +7,16 @@ const SUPER_ADMIN_EMAIL = 'aliraza.lead@gmail.com';
 const MAX_TOMBSTONES = 500;
 const MAX_NOTIFICATIONS = 400;
 const MAX_MESSAGES = 500;
+const LEGACY_TEST_TEAM_IDS = new Set(['team_sprint_alpha', 'team_test1', 'team_7dp9vu']);
+const LEGACY_TEST_USER_IDS = new Set(['user_1', 'user_friend_1', 'user_seed_sarah', 'user_seed_hamza', 'user_seed_zainab', 'user_seed_ali']);
+
+function isLegacyTestTeam(t) {
+  return !t || LEGACY_TEST_TEAM_IDS.has(t.id) || t.owner_id === 'leader_remote';
+}
+
+function isLegacyTestUser(u) {
+  return !u || LEGACY_TEST_USER_IDS.has(u.id) || (u.email && u.email.toLowerCase() === 'zohaib@example.com');
+}
 
 function defaultDeletedIds() {
   return {
@@ -103,15 +113,15 @@ function normalizeLoadedState(data) {
   const delSubtasks = new Set(deletedIds.subtasks);
 
   return {
-    teams: (Array.isArray(d.teams) ? d.teams : []).filter((t) => t && !delTeams.has(t.id) && t.owner_id !== 'leader_remote'),
-    members: (Array.isArray(d.members) ? d.members : []).filter((m) => m && !delMembers.has(`${m.team_id}_${m.user_id}`) && !delTeams.has(m.team_id)),
-    tasks: (Array.isArray(d.tasks) ? d.tasks : []).filter((t) => t && !delTasks.has(t.id) && (!t.team_id || !delTeams.has(t.team_id))),
+    teams: (Array.isArray(d.teams) ? d.teams : []).filter((t) => !isLegacyTestTeam(t) && !delTeams.has(t.id)),
+    members: (Array.isArray(d.members) ? d.members : []).filter((m) => m && !LEGACY_TEST_TEAM_IDS.has(m.team_id) && !LEGACY_TEST_USER_IDS.has(m.user_id) && !delMembers.has(`${m.team_id}_${m.user_id}`) && !delTeams.has(m.team_id)),
+    tasks: (Array.isArray(d.tasks) ? d.tasks : []).filter((t) => t && !LEGACY_TEST_TEAM_IDS.has(t.team_id) && !delTasks.has(t.id) && (!t.team_id || !delTeams.has(t.team_id))),
     subtasks: (Array.isArray(d.subtasks) ? d.subtasks : []).filter((s) => s && !delSubtasks.has(s.id) && !delTasks.has(s.task_id)),
-    chatMessages: (Array.isArray(d.chatMessages) ? d.chatMessages : []).filter((m) => m && !delTeams.has(m.team_id)).slice(-MAX_MESSAGES),
-    joinRequests: (Array.isArray(d.joinRequests) ? d.joinRequests : []).filter((r) => r && !delTeams.has(r.team_id)),
+    chatMessages: (Array.isArray(d.chatMessages) ? d.chatMessages : []).filter((m) => m && !LEGACY_TEST_TEAM_IDS.has(m.team_id) && !String(m.id || '').startsWith('msg_seed_') && !delTeams.has(m.team_id)).slice(-MAX_MESSAGES),
+    joinRequests: (Array.isArray(d.joinRequests) ? d.joinRequests : []).filter((r) => r && !LEGACY_TEST_TEAM_IDS.has(r.team_id) && !LEGACY_TEST_USER_IDS.has(r.user_id) && !delTeams.has(r.team_id)),
     connections: Array.isArray(d.connections) ? d.connections : [],
-    notifications: (Array.isArray(d.notifications) ? d.notifications : []).slice(0, MAX_NOTIFICATIONS),
-    users: Array.isArray(d.users) ? d.users : [],
+    notifications: (Array.isArray(d.notifications) ? d.notifications : []).filter((n) => n && !LEGACY_TEST_USER_IDS.has(n.user_id)).slice(0, MAX_NOTIFICATIONS),
+    users: (Array.isArray(d.users) ? d.users : []).filter((u) => !isLegacyTestUser(u)),
     deletedIds,
     authCredentials: d.authCredentials && typeof d.authCredentials === 'object' ? d.authCredentials : {},
     lastUpdated: d.lastUpdated || new Date().toISOString(),
@@ -143,18 +153,47 @@ async function getCloudState() {
   }
 }
 
+async function flushExpoPushBatch(messages) {
+  if (!Array.isArray(messages) || messages.length === 0) return;
+  try {
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timer = controller ? setTimeout(() => controller.abort(), 3500) : null;
+    await fetch('https://exp.host/--/api/v2/push/send', {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(messages.slice(0, 100)),
+      ...(controller ? { signal: controller.signal } : {}),
+    });
+    if (timer) clearTimeout(timer);
+  } catch {
+    // Best-effort remote push dispatch; in-app notifications are already persisted
+  }
+}
+
 async function saveCloudState(state) {
+  const pushBatch = Array.isArray(state._pushQueue) ? [...state._pushQueue] : [];
   state.lastUpdated = new Date().toISOString();
   state.notifications = (state.notifications || []).slice(0, MAX_NOTIFICATIONS);
   state.chatMessages = (state.chatMessages || []).slice(-MAX_MESSAGES);
-  const jsonStr = JSON.stringify(state);
+
+  const persistable = { ...state };
+  delete persistable._pushQueue;
+
+  const jsonStr = JSON.stringify(persistable);
   await put(BLOB_FILENAME, jsonStr, {
     access: 'public',
     addRandomSuffix: false,
     allowOverwrite: true,
     contentType: 'application/json',
   });
-  return state;
+
+  if (pushBatch.length > 0) {
+    await flushExpoPushBatch(pushBatch);
+  }
+  return persistable;
 }
 
 function canManageTeamInState(state, teamId, actorId) {
@@ -168,8 +207,40 @@ function canManageTeamInState(state, teamId, actorId) {
   return Boolean(mem && (mem.role === 'owner' || mem.role === 'admin'));
 }
 
+function queuePush(state, targetUserId, { title, body, data }) {
+  if (!targetUserId) return;
+  const recipient = (state.users || []).find((u) => u.id === targetUserId);
+  const token = recipient?.expo_push_token;
+  if (
+    typeof token !== 'string' ||
+    (!token.startsWith('ExponentPushToken[') && !token.startsWith('ExpoPushToken['))
+  ) {
+    return;
+  }
+  if (!Array.isArray(state._pushQueue)) state._pushQueue = [];
+  state._pushQueue.push({
+    to: token,
+    sound: 'default',
+    priority: 'high',
+    title,
+    body,
+    data: data || {},
+  });
+}
+
 function pushNotification(state, notif) {
   state.notifications = [notif, ...(state.notifications || []).filter((n) => n.id !== notif.id)].slice(0, MAX_NOTIFICATIONS);
+  queuePush(state, notif.user_id, {
+    title: notif.title,
+    body: notif.body,
+    data: {
+      kind: notif.kind,
+      taskId: notif.related_task_id,
+      teamId: notif.related_team_id,
+      joinRequestId: notif.related_join_request_id,
+      connectionId: notif.related_connection_id,
+    },
+  });
 }
 
 module.exports = async function handler(req, res) {
@@ -362,23 +433,23 @@ module.exports = async function handler(req, res) {
         const delSubtasks = new Set(state.deletedIds.subtasks);
 
         const teamMap = new Map();
-        state.teams.filter((t) => !delTeams.has(t.id) && t.owner_id !== 'leader_remote').forEach((t) => teamMap.set(t.id, t));
-        (incoming.teams || []).filter((t) => t && !delTeams.has(t.id) && t.owner_id !== 'leader_remote').forEach((t) => {
+        state.teams.filter((t) => !isLegacyTestTeam(t) && !delTeams.has(t.id)).forEach((t) => teamMap.set(t.id, t));
+        (incoming.teams || []).filter((t) => !isLegacyTestTeam(t) && !delTeams.has(t.id)).forEach((t) => {
           if (!teamMap.has(t.id)) teamMap.set(t.id, t);
         });
         state.teams = Array.from(teamMap.values());
 
         const memberMap = new Map();
-        state.members.filter((m) => !delMembers.has(`${m.team_id}_${m.user_id}`) && !delTeams.has(m.team_id)).forEach((m) => memberMap.set(`${m.team_id}_${m.user_id}`, m));
-        (incoming.members || []).filter((m) => m && !delMembers.has(`${m.team_id}_${m.user_id}`) && !delTeams.has(m.team_id)).forEach((m) => {
+        state.members.filter((m) => m && !LEGACY_TEST_TEAM_IDS.has(m.team_id) && !LEGACY_TEST_USER_IDS.has(m.user_id) && !delMembers.has(`${m.team_id}_${m.user_id}`) && !delTeams.has(m.team_id)).forEach((m) => memberMap.set(`${m.team_id}_${m.user_id}`, m));
+        (incoming.members || []).filter((m) => m && !LEGACY_TEST_TEAM_IDS.has(m.team_id) && !LEGACY_TEST_USER_IDS.has(m.user_id) && !delMembers.has(`${m.team_id}_${m.user_id}`) && !delTeams.has(m.team_id)).forEach((m) => {
           const key = `${m.team_id}_${m.user_id}`;
           if (!memberMap.has(key)) memberMap.set(key, m);
         });
         state.members = Array.from(memberMap.values());
 
         const taskMap = new Map();
-        state.tasks.filter((t) => !delTasks.has(t.id) && (!t.team_id || !delTeams.has(t.team_id))).forEach((t) => taskMap.set(t.id, t));
-        (incoming.tasks || []).filter((t) => t && !delTasks.has(t.id) && (!t.team_id || !delTeams.has(t.team_id))).forEach((t) => {
+        state.tasks.filter((t) => t && !LEGACY_TEST_TEAM_IDS.has(t.team_id) && !delTasks.has(t.id) && (!t.team_id || !delTeams.has(t.team_id))).forEach((t) => taskMap.set(t.id, t));
+        (incoming.tasks || []).filter((t) => t && !LEGACY_TEST_TEAM_IDS.has(t.team_id) && !delTasks.has(t.id) && (!t.team_id || !delTeams.has(t.team_id))).forEach((t) => {
           const prev = taskMap.get(t.id);
           if (!prev || new Date(t.updated_at || 0).getTime() > new Date(prev.updated_at || 0).getTime()) {
             taskMap.set(t.id, t);
@@ -387,15 +458,15 @@ module.exports = async function handler(req, res) {
         state.tasks = Array.from(taskMap.values());
 
         const subtaskMap = new Map();
-        state.subtasks.filter((s) => !delSubtasks.has(s.id) && !delTasks.has(s.task_id)).forEach((s) => subtaskMap.set(s.id, s));
+        state.subtasks.filter((s) => s && !delSubtasks.has(s.id) && !delTasks.has(s.task_id)).forEach((s) => subtaskMap.set(s.id, s));
         (incoming.subtasks || []).filter((s) => s && !delSubtasks.has(s.id) && !delTasks.has(s.task_id)).forEach((s) => {
           if (!subtaskMap.has(s.id)) subtaskMap.set(s.id, s);
         });
         state.subtasks = Array.from(subtaskMap.values());
 
         const chatMap = new Map();
-        state.chatMessages.filter((m) => !delTeams.has(m.team_id)).forEach((m) => chatMap.set(m.id, m));
-        (incoming.chatMessages || []).filter((m) => m && !delTeams.has(m.team_id)).forEach((m) => {
+        state.chatMessages.filter((m) => m && !LEGACY_TEST_TEAM_IDS.has(m.team_id) && !String(m.id || '').startsWith('msg_seed_') && !delTeams.has(m.team_id)).forEach((m) => chatMap.set(m.id, m));
+        (incoming.chatMessages || []).filter((m) => m && !LEGACY_TEST_TEAM_IDS.has(m.team_id) && !String(m.id || '').startsWith('msg_seed_') && !delTeams.has(m.team_id)).forEach((m) => {
           if (!chatMap.has(m.id)) chatMap.set(m.id, m);
         });
         state.chatMessages = Array.from(chatMap.values()).sort(
@@ -403,8 +474,8 @@ module.exports = async function handler(req, res) {
         );
 
         const reqMap = new Map();
-        state.joinRequests.filter((r) => !delTeams.has(r.team_id)).forEach((r) => reqMap.set(r.id, r));
-        (incoming.joinRequests || []).filter((r) => r && !delTeams.has(r.team_id)).forEach((r) => {
+        state.joinRequests.filter((r) => r && !LEGACY_TEST_TEAM_IDS.has(r.team_id) && !LEGACY_TEST_USER_IDS.has(r.user_id) && !delTeams.has(r.team_id)).forEach((r) => reqMap.set(r.id, r));
+        (incoming.joinRequests || []).filter((r) => r && !LEGACY_TEST_TEAM_IDS.has(r.team_id) && !LEGACY_TEST_USER_IDS.has(r.user_id) && !delTeams.has(r.team_id)).forEach((r) => {
           if (!reqMap.has(r.id)) reqMap.set(r.id, r);
         });
         state.joinRequests = Array.from(reqMap.values());
@@ -417,25 +488,23 @@ module.exports = async function handler(req, res) {
         state.connections = Array.from(connMap.values());
 
         const notifMap = new Map();
-        state.notifications.forEach((n) => notifMap.set(n.id, n));
-        (incoming.notifications || []).forEach((n) => {
+        state.notifications.filter((n) => n && !LEGACY_TEST_USER_IDS.has(n.user_id)).forEach((n) => notifMap.set(n.id, n));
+        (incoming.notifications || []).filter((n) => n && !LEGACY_TEST_USER_IDS.has(n.user_id)).forEach((n) => {
           if (n && !notifMap.has(n.id)) notifMap.set(n.id, n);
         });
         state.notifications = Array.from(notifMap.values()).sort(
           (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
         );
 
-        // Deduplicate users by email first, then id (keep cloud canonical record)
+        // Deduplicate users by email first, skipping legacy seed/test profiles
         const userByEmail = new Map();
-        state.users.forEach((u) => {
+        state.users.filter((u) => !isLegacyTestUser(u)).forEach((u) => {
           if (u?.email) userByEmail.set(u.email.trim().toLowerCase(), u);
         });
         (incoming.users || []).forEach((u) => {
-          if (!u?.email) return;
+          if (isLegacyTestUser(u) || !u?.email) return;
           const cleanE = u.email.trim().toLowerCase();
-          if (!userByEmail.has(cleanE) && !u.id.startsWith('user_seed_')) {
-            userByEmail.set(cleanE, { ...u, isAdmin: isStrictSuperAdminEmail(cleanE) });
-          } else if (!userByEmail.has(cleanE)) {
+          if (!userByEmail.has(cleanE)) {
             userByEmail.set(cleanE, { ...u, isAdmin: isStrictSuperAdminEmail(cleanE) });
           }
         });
@@ -808,17 +877,39 @@ module.exports = async function handler(req, res) {
         return res.status(200).json({ ok: true, state: toPublicState(state) });
       }
 
+      if (action === 'REGISTER_PUSH_TOKEN') {
+        const { userId, token } = payload || {};
+        if (!userId || !token) {
+          return res.status(400).json({ ok: false, error: 'Missing userId or token' });
+        }
+        state.users = state.users.map((u) =>
+          u.id === userId ? { ...u, expo_push_token: token } : u
+        );
+        state.members = state.members.map((m) =>
+          m.user_id === userId && m.profile
+            ? { ...m, profile: { ...m.profile, expo_push_token: token } }
+            : m
+        );
+        await saveCloudState(state);
+        return res.status(200).json({ ok: true, state: toPublicState(state) });
+      }
+
       if (action === 'SEND_MESSAGE') {
         const { message } = payload || {};
         if (message && (message.text || message.type === 'voice')) {
           state.chatMessages = [...state.chatMessages.filter((m) => m.id !== message.id), message];
+          const team = state.teams.find((t) => t.id === message.team_id);
+          const teamMembers = state.members.filter((m) => m.team_id === message.team_id);
+          const teamMemberIds = new Set(teamMembers.map((m) => m.user_id));
+          const mentionedIds = new Set();
+
           if (Array.isArray(message.mentions) && message.mentions.length > 0) {
-            const teamMemberIds = new Set(state.members.filter((m) => m.team_id === message.team_id).map((m) => m.user_id));
             message.mentions.forEach((handle) => {
               const target = state.users.find(
                 (u) => u.username && u.username.toLowerCase() === String(handle).toLowerCase() && teamMemberIds.has(u.id)
               );
               if (target && target.id !== message.user_id) {
+                mentionedIds.add(target.id);
                 pushNotification(state, {
                   id: `notif_mtn_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
                   user_id: target.id,
@@ -826,11 +917,26 @@ module.exports = async function handler(req, res) {
                   title: `${message.user_name} (@${message.user_username}) mentioned you`,
                   body: message.type === 'voice' ? 'Sent a voice note mentioning you' : (message.text || ''),
                   read: false,
+                  related_team_id: message.team_id,
                   created_at: new Date().toISOString(),
                 });
               }
             });
           }
+
+          // Dispatch direct remote push for non-mentioned active teammates (without flooding Alerts tab)
+          if (message.user_id !== 'system') {
+            teamMembers.forEach((m) => {
+              if (m.user_id !== message.user_id && !mentionedIds.has(m.user_id)) {
+                queuePush(state, m.user_id, {
+                  title: `💬 ${team?.name || 'Team Chat'}`,
+                  body: `${message.user_name}: ${message.type === 'voice' ? '🎤 Sent a voice note' : (message.text || '')}`,
+                  data: { kind: 'chat_message', teamId: message.team_id },
+                });
+              }
+            });
+          }
+
           await saveCloudState(state);
         }
         return res.status(200).json({ ok: true, state: toPublicState(state) });
@@ -881,9 +987,22 @@ module.exports = async function handler(req, res) {
                   body: `${actorName || 'Teammate'} submitted "${existing.title}". Ready for leader approval.`,
                   read: false,
                   related_task_id: existing.id,
+                  related_team_id: existing.team_id || undefined,
                   created_at: new Date().toISOString(),
                 });
               }
+            } else if (existing.status !== 'done' && task.status === 'done' && existing.assignee_id && existing.assignee_id !== actorId) {
+              pushNotification(state, {
+                id: `notif_done_${Date.now()}_${Math.random().toString(36).substring(2, 5)}`,
+                user_id: existing.assignee_id,
+                kind: 'task',
+                title: 'Task Approved! ✅',
+                body: `${actorName || 'Team Leader'} approved & completed "${existing.title}".`,
+                read: false,
+                related_task_id: existing.id,
+                related_team_id: existing.team_id || undefined,
+                created_at: new Date().toISOString(),
+              });
             }
           } else {
             state.deletedIds.tasks = removeTombstone(state.deletedIds.tasks, task.id);
@@ -900,6 +1019,7 @@ module.exports = async function handler(req, res) {
                 body: `${actorName || 'Team Leader'} assigned: "${task.title}". Deadline: ${task.due_date}.`,
                 read: false,
                 related_task_id: task.id,
+                related_team_id: task.team_id || undefined,
                 created_at: new Date().toISOString(),
               });
             }

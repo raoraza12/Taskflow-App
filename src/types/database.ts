@@ -11,6 +11,7 @@ export type NotificationKind =
   | 'task_submitted'
   | 'task_due_soon'
   | 'chat_mention'
+  | 'chat_message'
   | 'member_removed'
   | 'teammate_request'
   | 'teammate_accepted'
@@ -32,6 +33,7 @@ export interface Profile {
   created_at: string;
   isAdmin?: boolean;
   status?: 'active' | 'suspended';
+  expo_push_token?: string;
 }
 
 export interface Team {
@@ -105,6 +107,7 @@ export interface AppNotification {
   body: string;
   read: boolean;
   related_task_id?: string;
+  related_team_id?: string;
   related_join_request_id?: string;
   related_connection_id?: string;
   created_at: string;

@@ -771,7 +771,7 @@ export default function LoginScreen() {
                   <View style={styles.simulatedEmailBox}>
                     <View style={styles.simulatedHeader}>
                       <Ionicons name="mail" size={14} color="#0284c7" />
-                      <Text style={styles.simulatedTitle}>Inbox Simulation Notice</Text>
+                      <Text style={styles.simulatedTitle}>Security Verification Code</Text>
                     </View>
                     <Text style={styles.simulatedBody}>
                       Your OTP is: <Text style={styles.simulatedCode}>{simulatedEmailCode}</Text>

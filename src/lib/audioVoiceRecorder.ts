@@ -8,11 +8,6 @@ import { Platform } from 'react-native';
 import { Audio as ExpoAudio } from 'expo-av';
 import * as FileSystem from 'expo-file-system';
 
-// Lightweight dummy wav data URL for seed demo messages
-export function generateVoiceToneWav(_durationSec: number = 3): string {
-  return 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
-}
-
 export class VoiceRecorderService {
   // Web fields
   private mediaRecorder: MediaRecorder | null = null;

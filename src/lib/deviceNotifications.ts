@@ -1,4 +1,5 @@
 import * as Notifications from 'expo-notifications';
+import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 
 // Configure how notifications appear when the app is in foreground
@@ -20,7 +21,7 @@ try {
       sound: 'default',
     });
   }
-} catch (e) {
+} catch {
   // Suppress in testing / SSR environments
 }
 
@@ -51,8 +52,31 @@ export async function requestNotificationPermissions(): Promise<boolean> {
 }
 
 /**
- * Triggers a real native device push/banner notification immediately
- * Visible in Android notification bar, lock screen, iOS banner, and browser notification
+ * Register device for remote Expo Push Notifications (Android FCM / iOS APNs).
+ * Returns null gracefully if running on web or before native FCM credentials are configured.
+ */
+export async function registerForExpoPushToken(): Promise<string | null> {
+  try {
+    if (Platform.OS === 'web') return null;
+
+    const granted = await requestNotificationPermissions();
+    if (!granted) return null;
+
+    const projectId =
+      Constants?.expoConfig?.extra?.eas?.projectId ||
+      Constants?.easConfig?.projectId ||
+      'f237c84d-7db7-4332-888f-1eba25b03dac';
+
+    const tokenRes = await Notifications.getExpoPushTokenAsync({ projectId });
+    return tokenRes?.data || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Triggers a real native device push/banner notification immediately.
+ * Visible in Android notification bar, lock screen, iOS banner, and browser notification.
  */
 export async function triggerDeviceNotification(input: {
   title: string;

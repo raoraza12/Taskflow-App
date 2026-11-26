@@ -50,7 +50,7 @@ export function isAttemptingSecretAccess(prompt: string): boolean {
     /\b(password|passwords|passcode|passphrase|pin|app lock pin|secret key|token|hash|credential|otp|reset code|verification code|jwt|bearer)\b/i,
     /tell me (the|your|user) (password|pin|otp|code)/i,
     /show (password|pin|secret|otp|credential)/i,
-    /what is (the|my|ali|sarah|hamza|admin) (password|pin|otp)/i,
+    /what is (the|my|leader|member|admin) (password|pin|otp)/i,
     /join_password/i,
     /\b(hack|bypass|inject|dump database|dump users)\b/i,
   ];
@@ -275,7 +275,7 @@ export function executeEdgeIntelligenceTier(
     };
   }
 
-  // Intent 3.5: Specific Teammate's Tasks Inquiries (e.g. "Sarah ke tasks", "@hamza_dev ka kaam")
+  // Intent 3.5: Specific Teammate's Tasks Inquiries (e.g. "@teammate ka kaam")
   let askedTeammate: Profile | null = null;
   const targetMention = prompt.match(/@([a-zA-Z0-9_]+)/);
   if (targetMention) {
@@ -435,7 +435,7 @@ export function executeEdgeIntelligenceTier(
 
   // Fallback Contextual Response
   return {
-    reply: `Main aapke TaskFlow workspace ka Intelligent AI Agent hoon.\n\nMujhe aapki team, members, sprint tickets, deadlines, aur portal rules ki complete knowledge hai.\n\nAap mujhse pooch sakte hain:\n• *"Hamari team mein kaun kaun hai aur unke kya roles hain?"*\n• *"Mera aaj ka kya kaam due hai?"*\n• *"High-priority tickets dikhao"*\n• *"Overdue tasks kaun se hain?"*\n• *"Assign task UI Design to @sarah_ui high priority"*`,
+    reply: `Main aapke TaskFlow workspace ka Intelligent AI Agent hoon.\n\nMujhe aapki team, members, sprint tickets, deadlines, aur portal rules ki complete knowledge hai.\n\nAap mujhse pooch sakte hain:\n• *"Hamari team mein kaun kaun hai aur unke kya roles hain?"*\n• *"Mera aaj ka kya kaam due hai?"*\n• *"High-priority tickets dikhao"*\n• *"Overdue tasks kaun se hain?"*\n• *"Assign task UI Design to @teammate high priority"*`,
     actionType: 'info',
     modelUsed: modelName,
     modelTier: tier,

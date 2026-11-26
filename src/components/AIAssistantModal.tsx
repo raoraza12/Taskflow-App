@@ -90,7 +90,7 @@ export const AIAssistantModal: React.FC = () => {
     { label: '🔥 High Priority Tasks', prompt: 'High priority pending tickets dikhao' },
     { label: '⚠️ Overdue Tickets', prompt: 'Overdue tasks kaun se hain?' },
     { label: '📋 In-Review Submissions', prompt: 'Tasks submitted for review dikhao' },
-    { label: '⚡ Assign to @sarah_ui', prompt: 'Assign UI Redesign task to @sarah_ui high priority due today' },
+    { label: '⚡ Create Quick Task', prompt: 'Create urgent task Sprint QA Review due today' },
     { label: '📊 Status Summary', prompt: 'Workspace ka status aur velocity metrics batao' },
   ];
 
@@ -277,7 +277,7 @@ export const AIAssistantModal: React.FC = () => {
             <View style={styles.inputContainer}>
               <TextInput
                 style={styles.textInput}
-                placeholder="Ask AI in Roman Urdu or English (e.g. Assign UI task to @sarah_ui)..."
+                placeholder="Ask AI in Roman Urdu or English (e.g. Assign task to @teammate)..."
                 placeholderTextColor="#94a3b8"
                 value={inputText}
                 onChangeText={setInputText}
