@@ -11,7 +11,7 @@
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#0f172a"
+      "backgroundColor": "#f8fafc"
     },
     "ios": {
       "supportsTablet": true,
@@ -20,8 +20,13 @@
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#0f172a"
+        "backgroundColor": "#f8fafc"
       },
+      "permissions": [
+        "RECORD_AUDIO",
+        "POST_NOTIFICATIONS",
+        "INTERNET"
+      ],
       "package": "com.taskflow.app",
       "versionCode": 2
     },
@@ -40,7 +45,15 @@
       "expo-router",
       "expo-font",
       "expo-asset",
-      "expo-updates"
+      "expo-updates",
+      "expo-av",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/notification-icon.png",
+          "color": "#4f46e5"
+        }
+      ]
     ],
     "updates": {
       "url": "https://u.expo.dev/f237c84d-7db7-4332-888f-1eba25b03dac"

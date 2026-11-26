@@ -62,16 +62,7 @@ export default function EditTaskScreen() {
     }
   }, [task]);
 
-  if (!task) {
-    return (
-      <ScreenWrapper title="Task Not Found" showBack>
-        <Text style={{ color: currentTheme.colors.subtext }}>This task does not exist or was deleted.</Text>
-        <Button title="Back to Tasks" onPress={() => router.back()} style={{ marginTop: Spacing.md }} />
-      </ScreenWrapper>
-    );
-  }
-
-  const rawMembers = task.team_id ? getTeamMembers(task.team_id) : [];
+  const rawMembers = task?.team_id ? getTeamMembers(task.team_id) : [];
   const allAvailableAssignees = React.useMemo(() => {
     const list: Array<{
       id: string;
@@ -96,24 +87,33 @@ export default function EditTaskScreen() {
         });
       }
     });
-    users.forEach((u) => {
-      if (!seen.has(u.id)) {
-        seen.add(u.id);
-        list.push({
-          id: `usr_${u.id}`,
-          user_id: u.id,
-          name: u.name,
-          username: u.username,
-          role: 'member',
-          job_title: u.job_title,
-        });
-      }
-    });
+    if (task?.assignee && !seen.has(task.assignee.id)) {
+      seen.add(task.assignee.id);
+      list.push({
+        id: `asg_${task.assignee.id}`,
+        user_id: task.assignee.id,
+        name: task.assignee.name,
+        username: task.assignee.username,
+        role: 'member',
+        job_title: task.assignee.job_title,
+      });
+    }
     return list;
-  }, [rawMembers, users]);
+  }, [rawMembers, users, task?.assignee]);
+
+  if (!task) {
+    return (
+      <ScreenWrapper title="Task Not Found" showBack>
+        <Text style={{ color: currentTheme.colors.subtext }}>This task does not exist or was deleted.</Text>
+        <Button title="Back to Tasks" onPress={() => router.back()} style={{ marginTop: Spacing.md }} />
+      </ScreenWrapper>
+    );
+  }
+
   const isAssignee = task.assignee_id === user?.id;
-  // Only team leader/admin/owner or super admin can edit & delete tasks; assignees can only submit for review
+  // Only team leader/admin/owner or super admin (or creator of personal task) can edit & delete task definitions
   const canEditOrDelete = canManageTeam(task.team_id ?? '') || task.created_by_id === user?.id || isAppOwner(user);
+  const canChangeStatus = canEditOrDelete || isAssignee;
 
   const handleSave = async () => {
     if (!title.trim()) {
@@ -230,14 +230,18 @@ export default function EditTaskScreen() {
               return (
                 <Pressable
                   key={m.id}
+                  disabled={!canEditOrDelete}
                   style={[
                     styles.chip,
                     {
                       backgroundColor: isSelected ? currentTheme.colors.primaryLight : currentTheme.colors.bgElevated,
                       borderColor: isSelected ? currentTheme.colors.primary : currentTheme.colors.border,
+                      opacity: !canEditOrDelete && !isSelected ? 0.55 : 1,
                     },
                   ]}
-                  onPress={() => setAssigneeId(m.user_id)}
+                  onPress={() => {
+                    if (canEditOrDelete) setAssigneeId(m.user_id);
+                  }}
                 >
                   <View
                     style={[
@@ -327,17 +331,25 @@ export default function EditTaskScreen() {
               ? 'time'
               : 'list';
 
+          const isLockedOption =
+            !canChangeStatus ||
+            (!canEditOrDelete && !task.is_personal && Boolean(task.team_id) && st === 'done');
+
           return (
             <Pressable
               key={st}
+              disabled={isLockedOption}
               style={[
                 styles.selectorBtn,
                 {
                   backgroundColor: isSelected ? stBg : currentTheme.colors.bgElevated,
                   borderColor: isSelected ? stColor : currentTheme.colors.border,
+                  opacity: isLockedOption && !isSelected ? 0.45 : 1,
                 },
               ]}
-              onPress={() => setStatus(st)}
+              onPress={() => {
+                if (!isLockedOption) setStatus(st);
+              }}
             >
               <Ionicons
                 name={stIcon}
@@ -382,14 +394,18 @@ export default function EditTaskScreen() {
           return (
             <Pressable
               key={p}
+              disabled={!canEditOrDelete}
               style={[
                 styles.selectorBtn,
                 {
                   backgroundColor: isSelected ? pBg : currentTheme.colors.bgElevated,
                   borderColor: isSelected ? pColor : currentTheme.colors.border,
+                  opacity: !canEditOrDelete && !isSelected ? 0.55 : 1,
                 },
               ]}
-              onPress={() => setPriority(p)}
+              onPress={() => {
+                if (canEditOrDelete) setPriority(p);
+              }}
             >
               <Ionicons
                 name={pIcon}
@@ -424,6 +440,7 @@ export default function EditTaskScreen() {
         value={assignedDate}
         onChangeDate={setAssignedDate}
         placeholder="YYYY-MM-DD"
+        editable={canEditOrDelete}
       />
 
       <DatePickerInput
@@ -432,6 +449,7 @@ export default function EditTaskScreen() {
         onChangeDate={setDueDate}
         minDate={assignedDate}
         placeholder="YYYY-MM-DD"
+        editable={canEditOrDelete}
       />
 
       <View style={styles.timeRow}>
@@ -440,6 +458,7 @@ export default function EditTaskScreen() {
             label="Start Time"
             value={startTime}
             onChangeText={setStartTime}
+            editable={canEditOrDelete}
           />
         </View>
         <View style={{ flex: 1 }}>
@@ -447,6 +466,7 @@ export default function EditTaskScreen() {
             label="End Time"
             value={endTime}
             onChangeText={setEndTime}
+            editable={canEditOrDelete}
           />
         </View>
       </View>
@@ -510,6 +530,24 @@ export default function EditTaskScreen() {
           )}
         </Card>
       ))}
+
+      {/* Action: Save Progress Update (For Assignees) */}
+      {!canEditOrDelete && isAssignee && task.status !== 'done' && status !== task.status && status !== 'done' && (
+        <Button
+          title="Save Status Progress"
+          variant="outline"
+          onPress={async () => {
+            const res = await updateTask(task.id, { status });
+            if (res.ok) {
+              showAlert('Updated', `Task status changed to "${status.replace('_', ' ')}".`);
+              router.back();
+            } else {
+              showAlert('Permission Denied', res.error || 'Cannot update status');
+            }
+          }}
+          style={{ marginTop: Spacing.md }}
+        />
+      )}
 
       {/* Action: Submit Task for Review (For Teammates) */}
       {isAssignee && task.status !== 'done' && task.status !== 'submitted' && (

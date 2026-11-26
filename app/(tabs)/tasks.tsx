@@ -1,21 +1,19 @@
 import React, { useState } from 'react';
-import { StyleSheet, View, Text, Pressable, TouchableOpacity, ScrollView } from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
-import { useApp } from '../../src/context/AppContext';
-import { Colors, Radius, Spacing, Typography, Gradients } from '../../src/constants/colors';
+import { StyleSheet, View, Text, TouchableOpacity, ScrollView } from 'react-native';
+import { useApp, isAppOwner } from '../../src/context/AppContext';
+import { showAlert } from '../../src/lib/alerts';
+import { Colors, Radius, Spacing, Typography } from '../../src/constants/colors';
 import { ScreenWrapper } from '../../src/components/ScreenWrapper';
 import { Card } from '../../src/components/Card';
-import { Badge } from '../../src/components/Badge';
 import { Button } from '../../src/components/Button';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { Task, TaskStatus } from '../../src/types/database';
-import { ThemeSwitcher } from '../../src/components/ThemeSwitcher';
 import { THEMES } from '../../src/constants/theme';
 import { AnimatedTaskCard } from '../../src/components/AnimatedTaskCard';
 
 export default function TasksScreen() {
-  const { user, tasks, updateTask, theme } = useApp();
+  const { user, tasks, updateTask, submitTask, canManageTeam, theme } = useApp();
   const router = useRouter();
   const currentTheme = THEMES[theme];
 
@@ -43,14 +41,30 @@ export default function TasksScreen() {
   const submittedCount = scopedTasks.filter((t) => t.status === 'submitted').length;
   const doneCount = scopedTasks.filter((t) => t.status === 'done').length;
 
-  const toggleTaskStatus = (task: Task) => {
-    const nextStatus: Record<TaskStatus, TaskStatus> = {
-      todo: 'in_progress',
-      in_progress: 'submitted',
-      submitted: 'done',
-      done: 'todo',
-    };
-    updateTask(task.id, { status: nextStatus[task.status] });
+  const isLeaderOrOwner = (t: Task) =>
+    canManageTeam(t.team_id ?? '') ||
+    t.created_by_id === user?.id ||
+    isAppOwner(user) ||
+    Boolean(t.is_personal || !t.team_id);
+
+  const toggleTaskStatus = async (task: Task) => {
+    const canManage = isLeaderOrOwner(task);
+    if (!canManage && task.assignee_id !== user?.id) {
+      showAlert('View Only', 'Only the assignee or Team Leader can update this task status.');
+      return;
+    }
+    if (!canManage) {
+      if (task.status === 'todo') {
+        await updateTask(task.id, { status: 'in_progress' });
+      } else if (task.status === 'in_progress') {
+        await submitTask(task.id, 'Submitted for leader review');
+      } else {
+        showAlert('In Review', 'Awaiting Team Leader approval to mark Done.');
+      }
+      return;
+    }
+    const nextStatus = task.status === 'done' ? 'todo' : 'done';
+    await updateTask(task.id, { status: nextStatus });
   };
 
   return (
@@ -59,18 +73,6 @@ export default function TasksScreen() {
       subtitle={`${filteredTasks.length} task${filteredTasks.length === 1 ? '' : 's'} displayed`}
       headerRight={
         <View style={styles.headerActions}>
-          <TouchableOpacity
-            onPress={() => router.push('/teams/chat')}
-            style={[
-              styles.headerIconBtn,
-              {
-                backgroundColor: 'rgba(79, 70, 229, 0.08)',
-                borderColor: 'rgba(79, 70, 229, 0.25)',
-              },
-            ]}
-          >
-            <Ionicons name="chatbubbles" size={18} color={currentTheme.colors.primary} />
-          </TouchableOpacity>
           <TouchableOpacity
             onPress={() => router.push('/tasks/search')}
             style={[
@@ -344,10 +346,9 @@ export default function TasksScreen() {
             task={t}
             index={idx}
             currentTheme={currentTheme}
-            onToggleStatus={(task) => {
-              const nextStatus = task.status === 'done' ? 'todo' : 'done';
-              updateTask(task.id, { status: nextStatus });
-            }}
+            canEdit={isLeaderOrOwner(t)}
+            canToggleStatus={isLeaderOrOwner(t) || t.assignee_id === user?.id}
+            onToggleStatus={toggleTaskStatus}
             onPress={() => router.push({ pathname: '/tasks/edit', params: { taskId: t.id } })}
           />
         ))

@@ -1,12 +1,13 @@
-import React, { createContext, useContext, useState, useEffect, useMemo, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import * as SecureStore from 'expo-secure-store';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Platform } from 'react-native';
+import { AppState, Platform } from 'react-native';
 import {
   Profile,
   Team,
   TeamMember,
   Task,
+  TaskAttachment,
   Subtask,
   AppNotification,
   JoinRequest,
@@ -22,6 +23,7 @@ import { AppThemeKey } from '../constants/theme';
 import { runMultiModelAI, AIContextData, AIEngineResult } from '../lib/aiAgentEngine';
 import { generateVoiceToneWav } from '../lib/audioVoiceRecorder';
 import { triggerDeviceNotification, requestNotificationPermissions } from '../lib/deviceNotifications';
+import { uploadCloudMedia } from '../lib/cloudMedia';
 import { CONFIG } from '../constants/config';
 
 /**
@@ -29,17 +31,29 @@ import { CONFIG } from '../constants/config';
  * ONLY the owner (Ali Raza, aliraza.lead@gmail.com) has access to the Admin Panel.
  */
 export const isAppOwner = (u?: Profile | null): boolean => {
-  if (!u) return false;
-  const email = u.email?.toLowerCase().trim();
-  const username = u.username?.toLowerCase().trim();
-  const name = u.name?.toLowerCase().trim();
-  return (
-    email === 'aliraza.lead@gmail.com' ||
-    u.id === 'user_seed_ali' ||
-    username === 'ali_lead' ||
-    (Boolean(email) && email!.includes('aliraza')) ||
-    (Boolean(name) && name === 'ali raza')
-  );
+  if (!u || !u.email) return false;
+  return u.email.toLowerCase().trim() === 'aliraza.lead@gmail.com';
+};
+
+interface DeletedIdsState {
+  teams: string[];
+  members: string[];
+  tasks: string[];
+  subtasks: string[];
+  messages: string[];
+}
+
+const EMPTY_DELETED_IDS: DeletedIdsState = {
+  teams: [],
+  members: [],
+  tasks: [],
+  subtasks: [],
+  messages: [],
+};
+
+const addTombstoneId = (list: string[], id: string): string[] => {
+  if (!id || list.includes(id)) return list;
+  return [...list, id].slice(-500);
 };
 
 interface TaskInput {
@@ -54,6 +68,7 @@ interface TaskInput {
   dueDate: string;
   startTime?: string;
   endTime?: string;
+  attachments?: TaskAttachment[];
 }
 
 interface CreateTeamInput {
@@ -87,7 +102,12 @@ interface AppContextValue {
   // Password Reset OTP Flow
   sendPasswordResetOTP: (email: string) => Promise<{ ok: boolean; code?: string; error?: string }>;
   verifyPasswordResetOTP: (email: string, code: string) => { ok: boolean; error?: string };
-  resetPasswordWithOTP: (email: string, code: string, newPin: string) => Promise<{ ok: boolean; error?: string }>;
+  resetPasswordWithOTP: (
+    email: string,
+    code: string,
+    newPin: string,
+    target?: 'account' | 'applock'
+  ) => Promise<{ ok: boolean; error?: string }>;
   // Auth
   loginWithGoogle: (profile: Partial<Profile>) => Promise<{ ok: boolean; error?: string }>;
   signUp: (name: string, email: string, password: string) => Promise<{ ok: boolean; error?: string }>;
@@ -128,7 +148,7 @@ interface AppContextValue {
   markNotificationRead: (id: string) => void;
   markAllNotificationsRead: () => void;
   // Refresh
-  refreshData: () => void;
+  refreshData: () => Promise<void>;
   // UI Theme Demo Switcher
   theme: AppThemeKey;
   setTheme: (theme: AppThemeKey) => void;
@@ -182,6 +202,7 @@ const STORE_KEYS = {
   THEME: 'tf_theme',
   CHAT_MESSAGES: 'tf_chat_messages',
   AI_MESSAGES: 'tf_ai_messages',
+  DELETED_IDS: 'tf_deleted_ids',
 };
 
 async function secureGet(key: string): Promise<string | null> {
@@ -234,8 +255,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [connections, setConnections] = useState<TeammateConnection[]>([]);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [aiMessages, setAiMessages] = useState<AIAgentMessage[]>([]);
+  const [deletedIds, setDeletedIds] = useState<DeletedIdsState>(EMPTY_DELETED_IDS);
   const [isAIAssistantOpen, setIsAIAssistantOpen] = useState<boolean>(false);
   const [isLoading, setIsLoading] = useState<boolean>(true);
+
+  const deletedIdsRef = useRef<DeletedIdsState>(EMPTY_DELETED_IDS);
+  const notifiedIdsRef = useRef<Set<string>>(new Set());
+  const currentUserRef = useRef<Profile | null>(null);
+  currentUserRef.current = user;
 
   const openAIAssistant = useCallback(() => setIsAIAssistantOpen(true), []);
   const closeAIAssistant = useCallback(() => setIsAIAssistantOpen(false), []);
@@ -466,7 +493,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (rawSubtasks) setSubtasks(JSON.parse(rawSubtasks));
 
       const rawNotifs = await secureGet(STORE_KEYS.NOTIFICATIONS);
-      if (rawNotifs) setNotifications(JSON.parse(rawNotifs));
+      if (rawNotifs) {
+        const parsedNotifs: AppNotification[] = JSON.parse(rawNotifs);
+        setNotifications(parsedNotifs);
+        parsedNotifs.forEach((n) => notifiedIdsRef.current.add(n.id));
+      }
+
+      const rawDeleted = await secureGet(STORE_KEYS.DELETED_IDS);
+      if (rawDeleted) {
+        try {
+          const parsedDel = JSON.parse(rawDeleted);
+          const cleanDel: DeletedIdsState = {
+            teams: Array.isArray(parsedDel?.teams) ? parsedDel.teams.slice(-500) : [],
+            members: Array.isArray(parsedDel?.members) ? parsedDel.members.slice(-500) : [],
+            tasks: Array.isArray(parsedDel?.tasks) ? parsedDel.tasks.slice(-500) : [],
+            subtasks: Array.isArray(parsedDel?.subtasks) ? parsedDel.subtasks.slice(-500) : [],
+            messages: Array.isArray(parsedDel?.messages) ? parsedDel.messages.slice(-500) : [],
+          };
+          deletedIdsRef.current = cleanDel;
+          setDeletedIds(cleanDel);
+        } catch {}
+      }
 
       const rawHistory = await secureGet(STORE_KEYS.HISTORY);
       if (rawHistory) setHistory(JSON.parse(rawHistory));
@@ -614,24 +661,67 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     await secureSet(key, JSON.stringify(data));
   }, []);
 
+  const recordTombstone = useCallback(
+    async (category: keyof DeletedIdsState, id: string) => {
+      if (!id) return;
+      const next: DeletedIdsState = {
+        ...deletedIdsRef.current,
+        [category]: addTombstoneId(deletedIdsRef.current[category], id),
+      };
+      deletedIdsRef.current = next;
+      setDeletedIds(next);
+      await persist(STORE_KEYS.DELETED_IDS, next);
+    },
+    [persist]
+  );
+
   const applyCloudState = useCallback(
     (state: any) => {
       if (!state) return;
-      if (Array.isArray(state.teams) && state.teams.length > 0) {
+
+      const srvDel = state.deletedIds || EMPTY_DELETED_IDS;
+      const nextDel: DeletedIdsState = {
+        teams: Array.from(new Set([...deletedIdsRef.current.teams, ...(Array.isArray(srvDel.teams) ? srvDel.teams : [])])).slice(-500),
+        members: Array.from(new Set([...deletedIdsRef.current.members, ...(Array.isArray(srvDel.members) ? srvDel.members : [])])).slice(-500),
+        tasks: Array.from(new Set([...deletedIdsRef.current.tasks, ...(Array.isArray(srvDel.tasks) ? srvDel.tasks : [])])).slice(-500),
+        subtasks: Array.from(new Set([...deletedIdsRef.current.subtasks, ...(Array.isArray(srvDel.subtasks) ? srvDel.subtasks : [])])).slice(-500),
+        messages: Array.from(new Set([...deletedIdsRef.current.messages, ...(Array.isArray(srvDel.messages) ? srvDel.messages : [])])).slice(-500),
+      };
+      deletedIdsRef.current = nextDel;
+      setDeletedIds(nextDel);
+      persist(STORE_KEYS.DELETED_IDS, nextDel);
+
+      const delTeams = new Set(nextDel.teams);
+      const delMembers = new Set(nextDel.members);
+      const delTasks = new Set(nextDel.tasks);
+      const delSubtasks = new Set(nextDel.subtasks);
+
+      if (Array.isArray(state.teams)) {
         setTeams((prev) => {
           const map = new Map<string, Team>();
-          prev.forEach((t) => map.set(t.id, t));
-          state.teams.forEach((t: Team) => map.set(t.id, t));
+          prev.forEach((t) => {
+            if (!delTeams.has(t.id) && t.owner_id !== 'leader_remote') map.set(t.id, t);
+          });
+          state.teams.forEach((t: Team) => {
+            if (t && !delTeams.has(t.id) && t.owner_id !== 'leader_remote') map.set(t.id, t);
+          });
           const merged = Array.from(map.values());
           persist(STORE_KEYS.TEAMS, merged);
           return merged;
         });
       }
-      if (Array.isArray(state.members) && state.members.length > 0) {
+      if (Array.isArray(state.members)) {
         setMembers((prev) => {
           const map = new Map<string, TeamMember>();
-          prev.forEach((m) => map.set(`${m.team_id}_${m.user_id}`, m));
-          state.members.forEach((m: TeamMember) => map.set(`${m.team_id}_${m.user_id}`, m));
+          prev.forEach((m) => {
+            const k = `${m.team_id}_${m.user_id}`;
+            if (!delMembers.has(k) && !delTeams.has(m.team_id)) map.set(k, m);
+          });
+          state.members.forEach((m: TeamMember) => {
+            if (!m) return;
+            const k = `${m.team_id}_${m.user_id}`;
+            if (!delMembers.has(k) && !delTeams.has(m.team_id)) map.set(k, m);
+          });
           const merged = Array.from(map.values());
           persist(STORE_KEYS.MEMBERS, merged);
           return merged;
@@ -640,21 +730,47 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (Array.isArray(state.tasks)) {
         setTasks((prev) => {
           const map = new Map<string, Task>();
-          prev.forEach((t) => map.set(t.id, t));
-          state.tasks.forEach((t: Task) => map.set(t.id, t));
+          prev.forEach((t) => {
+            if (!delTasks.has(t.id) && (!t.team_id || !delTeams.has(t.team_id))) map.set(t.id, t);
+          });
+          state.tasks.forEach((t: Task) => {
+            if (!t || delTasks.has(t.id) || (t.team_id && delTeams.has(t.team_id))) return;
+            const cur = map.get(t.id);
+            if (!cur || new Date(t.updated_at || t.created_at).getTime() >= new Date(cur.updated_at || cur.created_at).getTime()) {
+              map.set(t.id, t);
+            }
+          });
           const merged = Array.from(map.values());
           persist(STORE_KEYS.TASKS, merged);
+          return merged;
+        });
+      }
+      if (Array.isArray(state.subtasks)) {
+        setSubtasks((prev) => {
+          const map = new Map<string, Subtask>();
+          prev.forEach((s) => {
+            if (!delSubtasks.has(s.id) && !delTasks.has(s.task_id)) map.set(s.id, s);
+          });
+          state.subtasks.forEach((s: Subtask) => {
+            if (s && !delSubtasks.has(s.id) && !delTasks.has(s.task_id)) map.set(s.id, s);
+          });
+          const merged = Array.from(map.values());
+          persist(STORE_KEYS.SUBTASKS, merged);
           return merged;
         });
       }
       if (Array.isArray(state.chatMessages)) {
         setChatMessages((prev) => {
           const map = new Map<string, ChatMessage>();
-          prev.forEach((m) => map.set(m.id, m));
-          state.chatMessages.forEach((m: ChatMessage) => map.set(m.id, m));
-          const merged = Array.from(map.values()).sort(
-            (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
-          );
+          prev.forEach((m) => {
+            if (!delTeams.has(m.team_id)) map.set(m.id, m);
+          });
+          state.chatMessages.forEach((m: ChatMessage) => {
+            if (m && !delTeams.has(m.team_id)) map.set(m.id, m);
+          });
+          const merged = Array.from(map.values())
+            .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+            .slice(-500);
           persist(STORE_KEYS.CHAT_MESSAGES, merged);
           return merged;
         });
@@ -662,8 +778,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (Array.isArray(state.joinRequests)) {
         setJoinRequests((prev) => {
           const map = new Map<string, JoinRequest>();
-          prev.forEach((r) => map.set(r.id, r));
-          state.joinRequests.forEach((r: JoinRequest) => map.set(r.id, r));
+          prev.forEach((r) => {
+            if (!delTeams.has(r.team_id)) map.set(r.id, r);
+          });
+          state.joinRequests.forEach((r: JoinRequest) => {
+            if (r && !delTeams.has(r.team_id)) map.set(r.id, r);
+          });
           const merged = Array.from(map.values());
           persist(STORE_KEYS.JOIN_REQUESTS, merged);
           return merged;
@@ -679,15 +799,69 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           return merged;
         });
       }
+      if (Array.isArray(state.notifications)) {
+        const activeUserId = currentUserRef.current?.id;
+        state.notifications.forEach((n: AppNotification) => {
+          if (n && activeUserId && n.user_id === activeUserId && !n.read && !notifiedIdsRef.current.has(n.id)) {
+            notifiedIdsRef.current.add(n.id);
+            triggerDeviceNotification({ title: n.title, body: n.body }).catch(() => {});
+          }
+        });
+        setNotifications((prev) => {
+          const map = new Map<string, AppNotification>();
+          prev.forEach((n) => {
+            notifiedIdsRef.current.add(n.id);
+            map.set(n.id, n);
+          });
+          state.notifications.forEach((n: AppNotification) => {
+            if (!n) return;
+            notifiedIdsRef.current.add(n.id);
+            const cur = map.get(n.id);
+            map.set(n.id, cur ? { ...n, read: Boolean(cur.read || n.read) } : n);
+          });
+          const merged = Array.from(map.values())
+            .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+            .slice(0, 400);
+          persist(STORE_KEYS.NOTIFICATIONS, merged);
+          return merged;
+        });
+      }
       if (Array.isArray(state.users)) {
         setUsers((prev) => {
           const map = new Map<string, Profile>();
           prev.forEach((u) => map.set(u.id, u));
-          state.users.forEach((u: Profile) => map.set(u.id, u));
+          state.users.forEach((u: Profile) => {
+            if (u) map.set(u.id, { ...u, isAdmin: isAppOwner(u) });
+          });
           const merged = Array.from(map.values());
           persist(STORE_KEYS.ALL_USERS, merged);
           return merged;
         });
+        const me = currentUserRef.current;
+        if (me) {
+          const serverMe = state.users.find(
+            (u: Profile) => u.id === me.id || (u.email && me.email && u.email.toLowerCase() === me.email.toLowerCase())
+          );
+          if (serverMe) {
+            if (serverMe.status === 'suspended') {
+              setUser(null);
+              secureSet(STORE_KEYS.USER, '');
+            } else {
+              const syncedMe = { ...me, ...serverMe, isAdmin: isAppOwner(serverMe) };
+              if (
+                syncedMe.name !== me.name ||
+                syncedMe.username !== me.username ||
+                syncedMe.picture !== me.picture ||
+                syncedMe.bio !== me.bio ||
+                syncedMe.job_title !== me.job_title ||
+                syncedMe.isAdmin !== me.isAdmin
+              ) {
+                setUser(syncedMe);
+                persist(STORE_KEYS.USER, syncedMe);
+              }
+            }
+          }
+        }
       }
     },
     [persist]
@@ -701,13 +875,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ action: action || 'MERGE', payload: payload || {} }),
         });
+        let data: any = null;
+        try {
+          data = await response.json();
+        } catch {}
         if (response.ok) {
-          const data = await response.json();
           if (data && data.state) {
             applyCloudState(data.state);
           }
           return data;
         }
+        return data && typeof data === 'object'
+          ? { ok: false, ...data }
+          : { ok: false, error: `Server error (${response.status})` };
       } catch (_) {
         // Offline resilience
       }
@@ -716,40 +896,86 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     [applyCloudState]
   );
 
-  // Background Cloud Sync & Auto-Refresh Polling (Multi-Device Real-Time Sync)
-  useEffect(() => {
-    if (!user || isLoading) return;
+  const latestSyncSnapshotRef = useRef({
+    teams,
+    members,
+    tasks,
+    subtasks,
+    chatMessages,
+    joinRequests,
+    connections,
+    notifications,
+    users,
+    deletedIds,
+  });
+  latestSyncSnapshotRef.current = {
+    teams,
+    members,
+    tasks,
+    subtasks,
+    chatMessages,
+    joinRequests,
+    connections,
+    notifications,
+    users,
+    deletedIds,
+  };
+  const mergedUserIdRef = useRef<string | null>(null);
 
-    // Request OS Push / Notification permissions on device
+  const refreshData = useCallback(async () => {
+    try {
+      const res = await fetch(`${CONFIG.SYNC_API_URL}?t=${Date.now()}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.state) {
+          applyCloudState(data.state);
+        }
+      }
+    } catch (_) {}
+  }, [applyCloudState]);
+
+  // Background Cloud Sync, Foreground Resume & Auto-Refresh Polling (Multi-Device Real-Time Sync)
+  useEffect(() => {
+    if (!user || isLoading) {
+      if (!user) mergedUserIdRef.current = null;
+      return;
+    }
+
     requestNotificationPermissions().catch(() => {});
 
-    // Initial two-way merge on startup / login (filtering out any old corrupted dummy teams)
-    const validTeams = teams.filter((t) => t.owner_id !== 'leader_remote');
-    syncCloudState('MERGE', {
-      teams: validTeams,
-      members,
-      tasks,
-      chatMessages,
-      joinRequests,
-      connections,
-      users,
-    });
+    if (mergedUserIdRef.current !== user.id) {
+      mergedUserIdRef.current = user.id;
+      const snap = latestSyncSnapshotRef.current;
+      const validTeams = snap.teams.filter((t) => t.owner_id !== 'leader_remote');
+      syncCloudState('MERGE', {
+        teams: validTeams,
+        members: snap.members,
+        tasks: snap.tasks,
+        subtasks: snap.subtasks,
+        chatMessages: snap.chatMessages,
+        joinRequests: snap.joinRequests,
+        connections: snap.connections,
+        notifications: snap.notifications,
+        users: snap.users,
+        deletedIds: snap.deletedIds,
+      });
+    }
 
-    // Auto-refresh interval (every 4 seconds) so leaders & members see updates in real-time
-    const pollTimer = setInterval(async () => {
-      try {
-        const res = await fetch(`${CONFIG.SYNC_API_URL}?t=${Date.now()}`);
-        if (res.ok) {
-          const data = await res.json();
-          if (data && data.state) {
-            applyCloudState(data.state);
-          }
-        }
-      } catch (_) {}
+    const pollTimer = setInterval(() => {
+      refreshData();
     }, 4000);
 
-    return () => clearInterval(pollTimer);
-  }, [user, isLoading]);
+    const appStateSub = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') {
+        refreshData();
+      }
+    });
+
+    return () => {
+      clearInterval(pollTimer);
+      appStateSub.remove();
+    };
+  }, [user, isLoading, syncCloudState, refreshData]);
 
   // Log activity helper
   const logAction = useCallback((action: string, detail: string) => {
@@ -799,10 +1025,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return { ok: false, error: 'Please enter your registered email address.' };
       }
 
-      // Check if user exists in registered users or is current user
-      const matchedUser =
+      // Check local users first, then pull latest cloud registry if needed
+      let matchedUser =
         users.find((u) => u.email.toLowerCase() === cleanEmail) ||
         (user?.email?.toLowerCase() === cleanEmail ? user : null);
+
+      if (!matchedUser) {
+        try {
+          const res = await fetch(`${CONFIG.SYNC_API_URL}?t=${Date.now()}`);
+          if (res.ok) {
+            const data = await res.json();
+            if (data?.state) {
+              applyCloudState(data.state);
+              const cloudUsers: Profile[] = Array.isArray(data.state.users) ? data.state.users : [];
+              matchedUser = cloudUsers.find((u) => u.email?.toLowerCase() === cleanEmail) || null;
+            }
+          }
+        } catch {}
+      }
 
       if (!matchedUser) {
         return {
@@ -811,7 +1051,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         };
       }
 
-      // Generate a secure 6-digit OTP code
+      // Generate a 6-digit OTP code
       const code = Math.floor(100000 + Math.random() * 900000).toString();
       const expiresAt = Date.now() + 5 * 60 * 1000; // 5 mins validity
 
@@ -827,6 +1067,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         created_at: new Date().toISOString(),
         kind: 'system',
       };
+      notifiedIdsRef.current.add(resetNotif.id);
 
       setNotifications((prev) => {
         const updated = [resetNotif, ...prev];
@@ -836,7 +1077,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       return { ok: true, code };
     },
-    [users, user, persist]
+    [users, user, persist, applyCloudState]
   );
 
   const verifyPasswordResetOTP = useCallback(
@@ -862,7 +1103,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   );
 
   const resetPasswordWithOTP = useCallback(
-    async (email: string, code: string, newPin: string): Promise<{ ok: boolean; error?: string }> => {
+    async (
+      email: string,
+      code: string,
+      newPin: string,
+      target: 'account' | 'applock' = 'account'
+    ): Promise<{ ok: boolean; error?: string }> => {
       const verification = verifyPasswordResetOTP(email, code);
       if (!verification.ok) {
         return verification;
@@ -874,43 +1120,49 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       const cleanEmail = email.trim().toLowerCase();
 
-      // 1. Update App Lock PIN
-      await secureSet(STORE_KEYS.APP_LOCK_PIN, newPin);
-      setAppLockPinState(newPin);
-      setIsAppLocked(false);
+      if (target === 'applock') {
+        await secureSet(STORE_KEYS.APP_LOCK_PIN, newPin);
+        setAppLockPinState(newPin);
+        setIsAppLocked(false);
+        setPendingPasswordReset(null);
+        logAction('app_lock_reset', `App lock password was reset via email OTP for ${cleanEmail}`);
+        return { ok: true };
+      }
 
-      // 2. Update local account password in userPasswords if applicable
+      // Update account password in cloud database
+      const cloudRes = await syncCloudState('RESET_USER_PASSWORD', {
+        email: cleanEmail,
+        newPassword: newPin,
+      });
+      if (cloudRes && !cloudRes.ok) {
+        return { ok: false, error: cloudRes.error || 'Failed to reset password on server.' };
+      }
+
+      // Update local account password cache
       const updatedPasswords = { ...userPasswords, [cleanEmail]: newPin };
       setUserPasswords(updatedPasswords);
       await persist(STORE_KEYS.USER_PASSWORDS, updatedPasswords);
 
-      // 3. Clear pending OTP session
       setPendingPasswordReset(null);
-
-      // 4. Log Action
-      logAction('password_reset_otp', `Password successfully reset via email OTP for ${cleanEmail}`);
-
+      logAction('password_reset_otp', `Account password successfully reset via email OTP for ${cleanEmail}`);
       return { ok: true };
     },
-    [verifyPasswordResetOTP, userPasswords, persist, logAction]
+    [verifyPasswordResetOTP, userPasswords, persist, logAction, syncCloudState]
   );
 
   // Auth Functions
   const loginWithGoogle = async (profileData: Partial<Profile>) => {
     const email = profileData.email?.trim().toLowerCase();
-    if (!email) return { ok: false, error: 'Email required' };
-    if (!email.endsWith('@gmail.com')) {
-      return { ok: false, error: 'Only verified @gmail.com accounts are allowed' };
-    }
+    if (!email || !email.includes('@')) return { ok: false, error: 'Valid Google email is required' };
 
-    // Check if user already exists to preserve their ID, teams and tasks
-    const existing = users.find((u) => u.email === email);
-    const isOwner = isAppOwner({ email, id: profileData.id || existing?.id } as any);
+    const existing = users.find((u) => u.email.toLowerCase() === email);
+    const isOwner = isAppOwner({ email } as Profile);
     const generatedUsername = generateUniqueUsername(profileData.name || '', email, users, existing?.id);
 
-    const profileToUse: Profile = existing
+    const candidateProfile: Profile = existing
       ? {
           ...existing,
+          google_id: profileData.google_id || existing.google_id,
           username: existing.username || generatedUsername,
           name: profileData.name || existing.name,
           picture: profileData.picture || existing.picture,
@@ -918,7 +1170,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           status: existing.status || 'active',
         }
       : {
-          id: profileData.id || `user_${Date.now()}`,
+          id: profileData.id || `user_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
           google_id: profileData.google_id || `google_${Date.now()}`,
           name: profileData.name || email.split('@')[0],
           username: generatedUsername,
@@ -930,13 +1182,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           status: 'active',
         };
 
+    const cloudRes = await syncCloudState('GOOGLE_LOGIN', { profile: candidateProfile });
+    if (cloudRes && !cloudRes.ok) {
+      return { ok: false, error: cloudRes.error || 'Google authentication was rejected by server.' };
+    }
+
+    const rawResolved = cloudRes?.user || candidateProfile;
+    const profileToUse: Profile = {
+      ...rawResolved,
+      isAdmin: isAppOwner(rawResolved),
+    };
+
+    if (profileToUse.status === 'suspended') {
+      return { ok: false, error: 'This account has been suspended by the Workspace Admin.' };
+    }
+
     setUser(profileToUse);
     await persist(STORE_KEYS.USER, profileToUse);
 
-    // Save to all users list cleanly
-    const exists = users.find((u) => u.email === email);
-    const updatedUsers = exists
-      ? users.map((u) => (u.email === email ? profileToUse : u))
+    const hasExisting = users.some((u) => u.id === profileToUse.id || u.email.toLowerCase() === email);
+    const updatedUsers = hasExisting
+      ? users.map((u) => (u.id === profileToUse.id || u.email.toLowerCase() === email ? profileToUse : u))
       : [...users, profileToUse];
     setUsers(updatedUsers);
     await persist(STORE_KEYS.ALL_USERS, updatedUsers);
@@ -962,24 +1228,36 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
     if (password.length < 6) return { ok: false, error: 'Password must be at least 6 characters' };
 
-    // Check if email already registered
-    const existingUser = users.find((u) => u.email === cleanEmail);
-    if (existingUser) return { ok: false, error: 'Account with this email already exists. Please Sign In.' };
-
     const generatedUsername = generateUniqueUsername(cleanName, cleanEmail, users);
-    const newProfile: Profile = {
-      id: `user_${Date.now()}`,
+    const draftProfile: Profile = {
+      id: `user_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       google_id: `local_${Date.now()}`,
       name: cleanName,
       username: generatedUsername,
       email: cleanEmail,
       email_verified: true,
       created_at: new Date().toISOString(),
-      isAdmin: isAppOwner({ email: cleanEmail } as any),
+      isAdmin: isAppOwner({ email: cleanEmail } as Profile),
       status: 'active',
     };
 
-    // Save password map
+    const cloudRes = await syncCloudState('REGISTER_USER', {
+      profile: draftProfile,
+      password,
+    });
+    if (cloudRes && !cloudRes.ok) {
+      return { ok: false, error: cloudRes.error || 'Account with this email already exists. Please Sign In.' };
+    }
+
+    if (!cloudRes) {
+      const existingUser = users.find((u) => u.email.toLowerCase() === cleanEmail);
+      if (existingUser) return { ok: false, error: 'Account with this email already exists. Please Sign In.' };
+    }
+
+    const newProfile: Profile = cloudRes?.user
+      ? { ...cloudRes.user, isAdmin: isAppOwner(cloudRes.user) }
+      : draftProfile;
+
     const updatedPasswords = { ...userPasswords, [cleanEmail]: password };
     setUserPasswords(updatedPasswords);
     await persist(STORE_KEYS.USER_PASSWORDS, updatedPasswords);
@@ -987,7 +1265,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setUser(newProfile);
     await persist(STORE_KEYS.USER, newProfile);
 
-    const updatedUserList = [...users.filter((u) => u.email !== cleanEmail), newProfile];
+    const updatedUserList = [...users.filter((u) => u.email.toLowerCase() !== cleanEmail), newProfile];
     setUsers(updatedUserList);
     await persist(STORE_KEYS.ALL_USERS, updatedUserList);
 
@@ -1002,17 +1280,57 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!cleanEmail) return { ok: false, error: 'Email is required' };
     if (!password) return { ok: false, error: 'Password is required' };
 
-    const existingUser = users.find((u) => u.email === cleanEmail);
+    const cloudRes = await syncCloudState('LOGIN_USER', {
+      email: cleanEmail,
+      password,
+    });
+
+    if (cloudRes) {
+      if (!cloudRes.ok) {
+        return { ok: false, error: cloudRes.error || 'Invalid email or password. Please check your credentials.' };
+      }
+
+      const rawUser =
+        cloudRes.user ||
+        (Array.isArray(cloudRes.state?.users)
+          ? cloudRes.state.users.find((u: Profile) => u.email?.toLowerCase() === cleanEmail)
+          : null);
+
+      if (!rawUser) {
+        return { ok: false, error: 'No account found. Please Sign Up first.' };
+      }
+
+      const authenticatedUser: Profile = {
+        ...rawUser,
+        isAdmin: isAppOwner(rawUser),
+      };
+
+      const updatedPasswords = { ...userPasswords, [cleanEmail]: password };
+      setUserPasswords(updatedPasswords);
+      await persist(STORE_KEYS.USER_PASSWORDS, updatedPasswords);
+
+      setUser(authenticatedUser);
+      await persist(STORE_KEYS.USER, authenticatedUser);
+      logAction('signin', `Signed in with ${cleanEmail}`);
+      return { ok: true };
+    }
+
+    // Offline fallback only when server is unreachable
+    const existingUser = users.find((u) => u.email.toLowerCase() === cleanEmail);
     if (!existingUser) return { ok: false, error: 'No account found. Please Sign Up first.' };
+    if (existingUser.status === 'suspended') {
+      return { ok: false, error: 'This account has been suspended by the Workspace Admin.' };
+    }
 
     const savedPassword = userPasswords[cleanEmail];
     if (!savedPassword || savedPassword !== password) {
       return { ok: false, error: 'Incorrect password. Please try again.' };
     }
 
-    setUser(existingUser);
-    await persist(STORE_KEYS.USER, existingUser);
-    logAction('signin', `Signed in with ${cleanEmail}`);
+    const syncedExisting: Profile = { ...existingUser, isAdmin: isAppOwner(existingUser) };
+    setUser(syncedExisting);
+    await persist(STORE_KEYS.USER, syncedExisting);
+    logAction('signin', `Signed in offline with ${cleanEmail}`);
     return { ok: true };
   };
 
@@ -1044,19 +1362,45 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       cleanedUsername = candidate;
     }
 
-    const updatedUser: Profile = {
-      ...user,
-      ...(patch.name ? { name: patch.name.trim() } : {}),
-      ...(patch.picture !== undefined ? { picture: patch.picture } : {}),
+    let nextPicture = patch.picture;
+    if (nextPicture && nextPicture.startsWith('data:')) {
+      const uploadedUrl = await uploadCloudMedia(nextPicture, {
+        folder: 'avatars',
+        extension: 'jpg',
+        contentType: 'image/jpeg',
+      });
+      if (uploadedUrl) {
+        nextPicture = uploadedUrl;
+      }
+    }
+
+    const cleanPatch = {
+      ...(patch.name !== undefined && patch.name.trim() ? { name: patch.name.trim() } : {}),
+      ...(nextPicture !== undefined ? { picture: nextPicture } : {}),
       ...(patch.bio !== undefined ? { bio: patch.bio.trim() } : {}),
       ...(patch.job_title !== undefined ? { job_title: patch.job_title.trim() } : {}),
       username: cleanedUsername,
     };
 
+    const cloudRes = await syncCloudState('UPDATE_PROFILE', {
+      userId: user.id,
+      patch: cleanPatch,
+    });
+    if (cloudRes && !cloudRes.ok) {
+      return { ok: false, error: cloudRes.error || 'Failed to update profile.' };
+    }
+
+    const updatedUser: Profile = cloudRes?.user
+      ? { ...cloudRes.user, isAdmin: isAppOwner(cloudRes.user) }
+      : {
+          ...user,
+          ...cleanPatch,
+          isAdmin: isAppOwner(user),
+        };
+
     setUser(updatedUser);
     await persist(STORE_KEYS.USER, updatedUser);
 
-    // Also update in users list and member profiles
     setUsers((prev) => {
       const updated = prev.map((u) => (u.id === user.id ? updatedUser : u));
       persist(STORE_KEYS.ALL_USERS, updated);
@@ -1210,12 +1554,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!user) return { ok: false, error: 'Must be logged in' };
     const req = joinRequests.find((r) => r.id === requestId);
     if (!req) return { ok: false, error: 'Request not found' };
+    if (req.status !== 'pending') return { ok: true };
 
     const team = teams.find((t) => t.id === req.team_id);
     if (!team) return { ok: false, error: 'Team not found' };
+    if (team.owner_id !== user.id && !canManageTeam(team.id) && !isAppOwner(user)) {
+      return { ok: false, error: 'Only Team Leader or Admin can approve requests' };
+    }
 
+    const cloudRes = await syncCloudState('APPROVE_JOIN', { requestId });
+    if (cloudRes) {
+      if (!cloudRes.ok) {
+        return { ok: false, error: cloudRes.error || 'Failed to approve join request' };
+      }
+      logAction('approve_join', `Approved join request ${requestId}`);
+      return { ok: true };
+    }
+
+    // Offline fallback only when server is unreachable
     const requester = users.find((u) => u.id === req.user_id) || req.profile;
-
     const newMember: TeamMember = {
       id: `member_${Date.now()}`,
       team_id: team.id,
@@ -1225,15 +1582,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       profile: requester,
     };
 
-    const updatedMembers = [...members, newMember];
+    const updatedMembers = [...members.filter((m) => !(m.team_id === team.id && m.user_id === req.user_id)), newMember];
     setMembers(updatedMembers);
     await persist(STORE_KEYS.MEMBERS, updatedMembers);
-
-    if (!users.some((u) => u.id === user.id)) {
-      const updatedUsers = [...users, user];
-      setUsers(updatedUsers);
-      await persist(STORE_KEYS.ALL_USERS, updatedUsers);
-    }
 
     const updatedRequests = joinRequests.map((r) =>
       r.id === requestId ? { ...r, status: 'approved' as const, resolved_at: new Date().toISOString() } : r
@@ -1241,9 +1592,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setJoinRequests(updatedRequests);
     await persist(STORE_KEYS.JOIN_REQUESTS, updatedRequests);
 
-    // Notify user
     const userNotif: AppNotification = {
-      id: `notif_${Date.now()}`,
+      id: `notif_appr_${requestId}`,
       user_id: req.user_id,
       kind: 'join_result',
       title: 'Join Request Approved! 🎉',
@@ -1251,38 +1601,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       read: false,
       created_at: new Date().toISOString(),
     };
-
-    // Notify all existing team members
-    const teamMembersToNotify = members.filter((m) => m.team_id === team.id && m.user_id !== req.user_id);
-    const peerNotifs: AppNotification[] = teamMembersToNotify.map((m) => ({
-      id: `notif_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-      user_id: m.user_id,
-      kind: 'team_joined',
-      title: 'New Member Joined Team',
-      body: `${requester?.name || 'A new member'} joined "${team.name}"`,
-      read: false,
-      created_at: new Date().toISOString(),
-    }));
-
+    notifiedIdsRef.current.add(userNotif.id);
     setNotifications((prev) => {
-      const updated = [userNotif, ...peerNotifs, ...prev];
+      const updated = [userNotif, ...prev];
       persist(STORE_KEYS.NOTIFICATIONS, updated);
       return updated;
     });
 
-    triggerDeviceNotification({
-      title: 'Join Request Approved! 🎉',
-      body: `You are now a member of "${team.name}"`,
-    });
-
-    // Send system announcement in group chat
-    sendChatMessage({
-      teamId: team.id,
-      text: `🎉 ${requester?.name || 'A new member'} has joined "${team.name}"! Welcome to the team!`,
-    }).catch(() => {});
-
     logAction('approve_join', `Approved join request for ${requester?.name || 'user'}`);
-    syncCloudState('APPROVE_JOIN', { requestId }).catch(() => {});
     return { ok: true };
   };
 
@@ -1290,12 +1616,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const req = joinRequests.find((r) => r.id === requestId);
     if (!req) return { ok: false, error: 'Request not found' };
 
+    const cloudRes = await syncCloudState('DECLINE_JOIN', { requestId });
+    if (cloudRes && !cloudRes.ok) {
+      return { ok: false, error: cloudRes.error || 'Failed to decline request' };
+    }
+
     const updatedRequests = joinRequests.map((r) =>
       r.id === requestId ? { ...r, status: 'declined' as const, resolved_at: new Date().toISOString() } : r
     );
     setJoinRequests(updatedRequests);
     await persist(STORE_KEYS.JOIN_REQUESTS, updatedRequests);
-    syncCloudState('DECLINE_JOIN', { requestId }).catch(() => {});
     return { ok: true };
   };
 
@@ -1304,12 +1634,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!user) return { ok: false, error: 'Must be logged in' };
     const team = teams.find((t) => t.id === teamId);
     if (!team) return { ok: false, error: 'Team not found' };
-    if (team.owner_id !== user.id) return { ok: false, error: 'Only team leader can rename the team' };
+    if (team.owner_id !== user.id && !isAppOwner(user)) {
+      return { ok: false, error: 'Only team leader can rename the team' };
+    }
 
     const cleanName = newName.trim();
     if (!cleanName) return { ok: false, error: 'Team name cannot be empty' };
 
-    // Prevent duplicate team name on rename
     const nameExists = teams.some(
       (t) => t.id !== teamId && t.name.trim().toLowerCase() === cleanName.toLowerCase()
     );
@@ -1317,6 +1648,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return {
         ok: false,
         error: `Another team with the name "${cleanName}" already exists. Please choose a unique name.`,
+      };
+    }
+
+    const cloudRes = await syncCloudState('RENAME_TEAM', {
+      teamId,
+      actorId: user.id,
+      newName: cleanName,
+    });
+    if (cloudRes && !cloudRes.ok) {
+      return {
+        ok: false,
+        error: cloudRes.error || `Team name "${cleanName}" is already registered.`,
       };
     }
 
@@ -1331,44 +1674,47 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!user) return { ok: false, error: 'Must be logged in' };
     const team = teams.find((t) => t.id === teamId);
     if (!team) return { ok: false, error: 'Team not found' };
-    if (team.owner_id !== user.id) return { ok: false, error: 'Only team leader can delete the team' };
+    if (team.owner_id !== user.id && !isAppOwner(user)) {
+      return { ok: false, error: 'Only team leader can delete the team' };
+    }
 
     const teamName = team.name;
-    const teamMembersToNotify = members.filter((m) => m.team_id === teamId && m.user_id !== user.id);
-    const delNotifs: AppNotification[] = teamMembersToNotify.map((m) => ({
-      id: `notif_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-      user_id: m.user_id,
-      kind: 'team_deleted',
-      title: 'Team Deleted',
-      body: `⚠️ Team "${teamName}" was deleted by ${user.name}.`,
-      read: false,
-      created_at: new Date().toISOString(),
-    }));
-
-    setNotifications((prev) => {
-      const updated = [...delNotifs, ...prev];
-      persist(STORE_KEYS.NOTIFICATIONS, updated);
-      return updated;
+    const cloudRes = await syncCloudState('DELETE_TEAM', {
+      teamId,
+      actorId: user.id,
+      actorName: user.name,
     });
+    if (cloudRes && !cloudRes.ok) {
+      return { ok: false, error: cloudRes.error || 'Failed to delete team' };
+    }
 
-    triggerDeviceNotification({
-      title: 'Team Deleted',
-      body: `⚠️ Team "${teamName}" was deleted by ${user.name}.`,
-    });
+    await recordTombstone('teams', teamId);
+    const removedTaskIds = tasks.filter((t) => t.team_id === teamId).map((t) => t.id);
+    for (const tid of removedTaskIds) {
+      await recordTombstone('tasks', tid);
+    }
 
     const updatedTeams = teams.filter((t) => t.id !== teamId);
     const updatedMembers = members.filter((m) => m.team_id !== teamId);
     const updatedTasks = tasks.filter((t) => t.team_id !== teamId);
+    const removedTaskSet = new Set(removedTaskIds);
+    const updatedSubtasks = subtasks.filter((s) => !removedTaskSet.has(s.task_id));
+    const updatedChat = chatMessages.filter((m) => m.team_id !== teamId);
+    const updatedReqs = joinRequests.filter((r) => r.team_id !== teamId);
 
     setTeams(updatedTeams);
     setMembers(updatedMembers);
     setTasks(updatedTasks);
+    setSubtasks(updatedSubtasks);
+    setChatMessages(updatedChat);
+    setJoinRequests(updatedReqs);
 
     await persist(STORE_KEYS.TEAMS, updatedTeams);
     await persist(STORE_KEYS.MEMBERS, updatedMembers);
     await persist(STORE_KEYS.TASKS, updatedTasks);
-
-    syncCloudState('DELETE_TEAM', { teamId }).catch(() => {});
+    await persist(STORE_KEYS.SUBTASKS, updatedSubtasks);
+    await persist(STORE_KEYS.CHAT_MESSAGES, updatedChat);
+    await persist(STORE_KEYS.JOIN_REQUESTS, updatedReqs);
 
     logAction('delete_team', `Deleted team "${teamName}"`);
     return { ok: true };
@@ -1377,8 +1723,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const promoteMember = async (teamId: string, memberUserId: string, newRole: Role) => {
     if (!user) return { ok: false, error: 'Must be logged in' };
     const team = teams.find((t) => t.id === teamId);
-    if (!team || team.owner_id !== user.id) {
+    if (!team || (team.owner_id !== user.id && !isAppOwner(user))) {
       return { ok: false, error: 'Only team leader can change roles' };
+    }
+
+    const cloudRes = await syncCloudState('PROMOTE_MEMBER', {
+      teamId,
+      actorId: user.id,
+      memberUserId,
+      newRole,
+    });
+    if (cloudRes && !cloudRes.ok) {
+      return { ok: false, error: cloudRes.error || 'Failed to update member role' };
     }
 
     const updatedMembers = members.map((m) =>
@@ -1394,27 +1750,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!user) return { ok: false, error: 'Must be logged in' };
     const team = teams.find((t) => t.id === teamId);
     if (!team) return { ok: false, error: 'Team not found' };
+    if (!canManageTeam(teamId) && !isAppOwner(user)) {
+      return { ok: false, error: 'Only team leader or admin can remove members' };
+    }
     if (memberUserId === team.owner_id) return { ok: false, error: 'Cannot remove team leader' };
 
+    const cloudRes = await syncCloudState('REMOVE_MEMBER', {
+      teamId,
+      actorId: user.id,
+      memberUserId,
+    });
+    if (cloudRes && !cloudRes.ok) {
+      return { ok: false, error: cloudRes.error || 'Failed to remove member' };
+    }
+
+    await recordTombstone('members', `${teamId}_${memberUserId}`);
     const updatedMembers = members.filter((m) => !(m.team_id === teamId && m.user_id === memberUserId));
     setMembers(updatedMembers);
     await persist(STORE_KEYS.MEMBERS, updatedMembers);
-
-    // Notify removed user
-    const notif: AppNotification = {
-      id: `notif_${Date.now()}`,
-      user_id: memberUserId,
-      kind: 'member_removed',
-      title: 'Removed from Team',
-      body: `You were removed from "${team.name}"`,
-      read: false,
-      created_at: new Date().toISOString(),
-    };
-    setNotifications((prev) => {
-      const updated = [notif, ...prev];
-      persist(STORE_KEYS.NOTIFICATIONS, updated);
-      return updated;
-    });
 
     logAction('remove_member', `Removed member from "${team.name}"`);
     return { ok: true };
@@ -1427,41 +1780,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (team.owner_id === user.id) return { ok: false, error: 'Leader cannot leave. Delete team instead.' };
 
     const teamName = team.name;
+    const cloudRes = await syncCloudState('LEAVE_TEAM', {
+      teamId,
+      userId: user.id,
+      userName: user.name,
+    });
+    if (cloudRes && !cloudRes.ok) {
+      return { ok: false, error: cloudRes.error || 'Failed to leave team' };
+    }
+
+    await recordTombstone('members', `${teamId}_${user.id}`);
     const updatedMembers = members.filter((m) => !(m.team_id === teamId && m.user_id === user.id));
     setMembers(updatedMembers);
     await persist(STORE_KEYS.MEMBERS, updatedMembers);
 
-    // Send system announcement in group chat
-    sendChatMessage({
-      teamId,
-      text: `🚪 ${user.name} has left the team.`,
-    }).catch(() => {});
-
-    // Notify remaining team members
-    const notifs: AppNotification[] = updatedMembers
-      .filter((m) => m.team_id === teamId)
-      .map((m) => ({
-        id: `notif_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-        user_id: m.user_id,
-        kind: 'team_left',
-        title: 'Teammate Left',
-        body: `${user.name} has left "${teamName}"`,
-        read: false,
-        created_at: new Date().toISOString(),
-      }));
-
-    setNotifications((prev) => {
-      const updated = [...notifs, ...prev];
-      persist(STORE_KEYS.NOTIFICATIONS, updated);
-      return updated;
-    });
-
-    triggerDeviceNotification({
-      title: 'Teammate Left',
-      body: `${user.name} left "${teamName}"`,
-    });
-
-    syncCloudState('LEAVE_TEAM', { teamId, userId: user.id, userName: user.name }).catch(() => {});
+    if (!cloudRes) {
+      sendChatMessage({
+        teamId,
+        text: `🚪 ${user.name} has left the team.`,
+      }).catch(() => {});
+    }
 
     logAction('leave_team', `Left team "${teamName}"`);
     return { ok: true };
@@ -1496,26 +1834,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setConnections(updatedConns);
     await persist(STORE_KEYS.CONNECTIONS, updatedConns);
 
-    const notif: AppNotification = {
-      id: `notif_${Date.now()}`,
-      user_id: toUserId,
-      kind: 'teammate_request',
-      title: 'Teammate Request',
-      body: `${user.name} (@${user.username || 'member'}) sent you a teammate request!`,
-      read: false,
-      related_connection_id: newConn.id,
-      created_at: new Date().toISOString(),
-    };
-    setNotifications((prev) => {
-      const updated = [notif, ...prev];
-      persist(STORE_KEYS.NOTIFICATIONS, updated);
-      return updated;
-    });
-
-    triggerDeviceNotification({
-      title: 'New Teammate Request',
-      body: `${user.name} sent you a connection request!`,
-    });
+    syncCloudState('CONNECTION_REQUEST', {
+      connection: newConn,
+      senderName: user.name,
+    }).catch(() => {});
 
     logAction('teammate_request', `Sent teammate request to user ${toUserId}`);
     return { ok: true };
@@ -1532,27 +1854,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setConnections(updatedConns);
     await persist(STORE_KEYS.CONNECTIONS, updatedConns);
 
-    // Notify original requester
-    const notif: AppNotification = {
-      id: `notif_${Date.now()}`,
-      user_id: conn.from_user_id,
-      kind: 'teammate_accepted',
-      title: 'Teammate Request Accepted! ✨',
-      body: `${user.name} accepted your teammate request. You are now connected!`,
-      read: false,
-      related_connection_id: connectionId,
-      created_at: new Date().toISOString(),
-    };
-    setNotifications((prev) => {
-      const updated = [notif, ...prev];
-      persist(STORE_KEYS.NOTIFICATIONS, updated);
-      return updated;
-    });
-
-    triggerDeviceNotification({
-      title: 'Teammate Connected! ✨',
-      body: `${user.name} accepted your connection request!`,
-    });
+    syncCloudState('CONNECTION_RESPOND', {
+      connectionId,
+      status: 'accepted',
+      responderName: user.name,
+    }).catch(() => {});
 
     logAction('accept_teammate', `Accepted teammate request from user ${conn.from_user_id}`);
     return { ok: true };
@@ -1564,6 +1870,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
     setConnections(updatedConns);
     await persist(STORE_KEYS.CONNECTIONS, updatedConns);
+
+    syncCloudState('CONNECTION_RESPOND', {
+      connectionId,
+      status: 'declined',
+      responderName: user?.name,
+    }).catch(() => {});
     return { ok: true };
   };
 
@@ -1632,6 +1944,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       due_date: input.dueDate || today,
       start_time: input.startTime || presentMilitaryTime,
       end_time: input.endTime || '18:00',
+      ...(input.attachments && input.attachments.length > 0 ? { attachments: input.attachments } : {}),
       created_at: currentIso,
       updated_at: currentIso,
     };
@@ -1639,12 +1952,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const updatedTasks = [newTask, ...tasks];
     setTasks(updatedTasks);
     await persist(STORE_KEYS.TASKS, updatedTasks);
-    syncCloudState('SAVE_TASK', { task: newTask }).catch(() => {});
+    const cloudRes = await syncCloudState('SAVE_TASK', {
+      task: newTask,
+      actorId: user.id,
+      actorName: user.name,
+    });
 
-    // Notify assignee if assigned to someone else
-    if (newTask.assignee_id !== user.id) {
+    if (!cloudRes && newTask.assignee_id !== user.id) {
       const notif: AppNotification = {
-        id: `notif_${Date.now()}`,
+        id: `notif_assign_${taskId}`,
         user_id: newTask.assignee_id,
         kind: 'task_assigned',
         title: 'New Task Assigned 📋',
@@ -1657,11 +1973,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const updated = [notif, ...prev];
         persist(STORE_KEYS.NOTIFICATIONS, updated);
         return updated;
-      });
-
-      triggerDeviceNotification({
-        title: 'New Task Assigned 📋',
-        body: `${user.name} assigned: "${newTask.title}". Deadline: ${newTask.due_date}.`,
       });
     }
 
@@ -1689,31 +2000,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setTasks(updatedTasks);
     await persist(STORE_KEYS.TASKS, updatedTasks);
     const submittedTask = updatedTasks.find((t) => t.id === taskId);
-    if (submittedTask) syncCloudState('SAVE_TASK', { task: submittedTask }).catch(() => {});
+    const cloudRes = submittedTask
+      ? await syncCloudState('SAVE_TASK', {
+          task: submittedTask,
+          actorId: user.id,
+          actorName: user.name,
+        })
+      : null;
 
-    // Determine who to notify (Task Creator or Team Owner)
-    const targetUserId = task.created_by_id !== user.id ? task.created_by_id : null;
-    if (targetUserId) {
-      const notif: AppNotification = {
-        id: `notif_${Date.now()}`,
-        user_id: targetUserId,
-        kind: 'task_submitted',
-        title: 'Task Submitted for Review 🚀',
-        body: `${user.name} submitted task: "${task.title}". Ready for leader approval.`,
-        read: false,
-        related_task_id: taskId,
-        created_at: submittedAt,
-      };
-      setNotifications((prev) => {
-        const updated = [notif, ...prev];
-        persist(STORE_KEYS.NOTIFICATIONS, updated);
-        return updated;
-      });
-
-      triggerDeviceNotification({
-        title: 'Task Submitted for Review 🚀',
-        body: `${user.name} submitted task: "${task.title}". Ready for leader approval.`,
-      });
+    if (!cloudRes) {
+      const targetUserId = task.created_by_id !== user.id ? task.created_by_id : null;
+      if (targetUserId) {
+        const notif: AppNotification = {
+          id: `notif_submit_${taskId}_${Date.now()}`,
+          user_id: targetUserId,
+          kind: 'task_submitted',
+          title: 'Task Submitted for Review 🚀',
+          body: `${user.name} submitted task: "${task.title}". Ready for leader approval.`,
+          read: false,
+          related_task_id: taskId,
+          created_at: submittedAt,
+        };
+        setNotifications((prev) => {
+          const updated = [notif, ...prev];
+          persist(STORE_KEYS.NOTIFICATIONS, updated);
+          return updated;
+        });
+      }
     }
 
     logAction('submit_task', `Submitted task "${task.title}"`);
@@ -1725,33 +2038,53 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const task = tasks.find((t) => t.id === taskId);
     if (!task) return { ok: false, error: 'Task not found' };
 
-    // Authorization: Only Leader / Admin of that team or Creator or App Owner can edit task definitions
     const isLeaderOrAdmin = canManageTeam(task.team_id ?? '') || task.created_by_id === user.id || isAppOwner(user);
+    const isPersonalOwner = Boolean(task.is_personal || !task.team_id) && (task.assignee_id === user.id || task.created_by_id === user.id);
 
-    // If assigned member tries to modify core details, reject!
-    if (!isLeaderOrAdmin) {
+    if (!isLeaderOrAdmin && !isPersonalOwner) {
+      if (task.assignee_id !== user.id) {
+        return {
+          ok: false,
+          error: 'Permission Denied: Only the assignee or Team Leader can update this task.',
+        };
+      }
       if (
         patch.title !== undefined ||
         patch.description !== undefined ||
         patch.assignee_id !== undefined ||
         patch.priority !== undefined ||
         patch.due_date !== undefined ||
-        patch.assigned_date !== undefined
+        patch.assigned_date !== undefined ||
+        patch.start_time !== undefined ||
+        patch.end_time !== undefined ||
+        patch.team_id !== undefined
       ) {
         return {
           ok: false,
           error: 'Permission Denied: Only Team Leader or Admin can modify task details.',
         };
       }
+      if (patch.status === 'done') {
+        return {
+          ok: false,
+          error: 'Only Team Leader or Admin can mark team tasks Done. Please submit for review instead.',
+        };
+      }
     }
 
-    const updatedTasks = tasks.map((t) =>
-      t.id === taskId ? { ...t, ...patch, updated_at: new Date().toISOString() } : t
-    );
+    const nextTask: Task = { ...task, ...patch, updated_at: new Date().toISOString() };
+    const cloudRes = await syncCloudState('SAVE_TASK', {
+      task: nextTask,
+      actorId: user.id,
+      actorName: user.name,
+    });
+    if (cloudRes && !cloudRes.ok) {
+      return { ok: false, error: cloudRes.error || 'Failed to update task' };
+    }
+
+    const updatedTasks = tasks.map((t) => (t.id === taskId ? nextTask : t));
     setTasks(updatedTasks);
     await persist(STORE_KEYS.TASKS, updatedTasks);
-    const submittedTask = updatedTasks.find((t) => t.id === taskId);
-    if (submittedTask) syncCloudState('SAVE_TASK', { task: submittedTask }).catch(() => {});
     logAction('update_task', `Updated task details`);
     return { ok: true };
   };
@@ -1769,13 +2102,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
     }
 
+    const cloudRes = await syncCloudState('DELETE_TASK', { taskId, actorId: user.id });
+    if (cloudRes && !cloudRes.ok) {
+      return { ok: false, error: cloudRes.error || 'Failed to delete task' };
+    }
+
+    await recordTombstone('tasks', taskId);
+    const removedSubs = subtasks.filter((s) => s.task_id === taskId).map((s) => s.id);
+    for (const sid of removedSubs) {
+      await recordTombstone('subtasks', sid);
+    }
+
     const updatedTasks = tasks.filter((t) => t.id !== taskId);
     const updatedSubtasks = subtasks.filter((s) => s.task_id !== taskId);
     setTasks(updatedTasks);
     setSubtasks(updatedSubtasks);
     await persist(STORE_KEYS.TASKS, updatedTasks);
     await persist(STORE_KEYS.SUBTASKS, updatedSubtasks);
-    syncCloudState('DELETE_TASK', { taskId }).catch(() => {});
     logAction('delete_task', 'Deleted task');
     return { ok: true };
   };
@@ -1784,7 +2127,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const addSubtask = async (taskId: string, title: string) => {
     if (!title.trim()) return { ok: false, error: 'Subtask title required' };
     const newSubtask: Subtask = {
-      id: `sub_${Date.now()}`,
+      id: `sub_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       task_id: taskId,
       title: title.trim(),
       done: false,
@@ -1794,20 +2137,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const updatedSubtasks = [...subtasks, newSubtask];
     setSubtasks(updatedSubtasks);
     await persist(STORE_KEYS.SUBTASKS, updatedSubtasks);
+    syncCloudState('SAVE_SUBTASK', { subtask: newSubtask }).catch(() => {});
     return { ok: true };
   };
 
   const toggleSubtask = async (subtaskId: string) => {
-    const updated = subtasks.map((s) => (s.id === subtaskId ? { ...s, done: !s.done } : s));
+    let toggledSubtask: Subtask | null = null;
+    const updated = subtasks.map((s) => {
+      if (s.id === subtaskId) {
+        toggledSubtask = { ...s, done: !s.done };
+        return toggledSubtask;
+      }
+      return s;
+    });
     setSubtasks(updated);
     await persist(STORE_KEYS.SUBTASKS, updated);
+    if (toggledSubtask) {
+      syncCloudState('SAVE_SUBTASK', { subtask: toggledSubtask }).catch(() => {});
+    }
     return { ok: true };
   };
 
   const deleteSubtask = async (subtaskId: string) => {
+    await recordTombstone('subtasks', subtaskId);
     const updated = subtasks.filter((s) => s.id !== subtaskId);
     setSubtasks(updated);
     await persist(STORE_KEYS.SUBTASKS, updated);
+    syncCloudState('DELETE_SUBTASK', { subtaskId }).catch(() => {});
     return { ok: true };
   };
 
@@ -1816,12 +2172,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const updated = notifications.map((n) => (n.id === id ? { ...n, read: true } : n));
     setNotifications(updated);
     persist(STORE_KEYS.NOTIFICATIONS, updated);
+    syncCloudState('MARK_NOTIFICATION_READ', { notificationId: id }).catch(() => {});
   };
 
   const markAllNotificationsRead = () => {
-    const updated = notifications.map((n) => ({ ...n, read: true }));
+    const uid = user?.id;
+    const updated = notifications.map((n) => (!uid || n.user_id === uid ? { ...n, read: true } : n));
     setNotifications(updated);
     persist(STORE_KEYS.NOTIFICATIONS, updated);
+    if (uid) {
+      syncCloudState('MARK_ALL_NOTIFICATIONS_READ', { userId: uid }).catch(() => {});
+    }
   };
 
   const unreadCount = useMemo(() => {
@@ -1855,7 +2216,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           (t.assignee_id === user?.id ? user : undefined),
         subtasks: subtasks.filter((s) => s.task_id === t.id),
       }));
-  }, [tasks, myTeamIds, users, user, subtasks]);
+  }, [tasks, myTeamIds, users, members, user, subtasks]);
 
   const pendingRequestsForOwner = useMemo(() => {
     if (!user) return [];
@@ -1863,24 +2224,37 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return joinRequests.filter((r) => r.status === 'pending' && ownedTeams.has(r.team_id));
   }, [user, teams, joinRequests]);
 
-  const refreshData = () => {};
-
   // Super Admin Action Functions (Strictly Owner Only)
   const adminToggleUserAdmin = useCallback(async (userId: string) => {
     if (!isAppOwner(user)) return;
     const target = users.find((u) => u.id === userId);
-    if (isAppOwner(target)) return; // Cannot demote the primary owner
+    if (isAppOwner(target)) return;
+
+    await syncCloudState('ADMIN_ACTION', {
+      actorEmail: user!.email,
+      subAction: 'TOGGLE_ADMIN',
+      targetUserId: userId,
+    });
 
     setUsers((prev) => {
       const updated = prev.map((u) => (u.id === userId ? { ...u, isAdmin: !u.isAdmin } : u));
       persist(STORE_KEYS.ALL_USERS, updated);
       return updated;
     });
-    setUser((prev) => (prev?.id === userId ? { ...prev, isAdmin: !prev.isAdmin } : prev));
     logAction('admin_role_change', `Toggled Admin privilege for user ID ${userId}`);
-  }, [user, users, persist, logAction]);
+  }, [user, users, persist, logAction, syncCloudState]);
 
   const adminToggleUserStatus = useCallback(async (userId: string) => {
+    if (!isAppOwner(user)) return;
+    const target = users.find((u) => u.id === userId);
+    if (isAppOwner(target)) return;
+
+    await syncCloudState('ADMIN_ACTION', {
+      actorEmail: user!.email,
+      subAction: 'TOGGLE_STATUS',
+      targetUserId: userId,
+    });
+
     setUsers((prev) => {
       const updated = prev.map((u) => {
         if (u.id === userId) {
@@ -1893,10 +2267,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return updated;
     });
     logAction('admin_status_change', `Toggled account status for user ID ${userId}`);
-  }, [persist, logAction]);
+  }, [user, users, persist, logAction, syncCloudState]);
 
   const adminReassignTask = useCallback(async (taskId: string, newAssigneeId: string) => {
+    if (!isAppOwner(user)) return;
     const assignee = users.find((u) => u.id === newAssigneeId) || user || undefined;
+
+    await syncCloudState('ADMIN_ACTION', {
+      actorEmail: user!.email,
+      subAction: 'REASSIGN_TASK',
+      taskId,
+      newAssigneeId,
+    });
+
     setTasks((prev) => {
       const updated = prev.map((t) =>
         t.id === taskId
@@ -1907,25 +2290,49 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return updated;
     });
     logAction('admin_reassign_task', `Task ${taskId} was reassigned to user ${newAssigneeId}`);
-  }, [users, user, persist, logAction]);
+  }, [users, user, persist, logAction, syncCloudState]);
 
   const adminTransferTeam = useCallback(async (teamId: string, newOwnerId: string) => {
+    if (!isAppOwner(user)) return;
+
+    await syncCloudState('ADMIN_ACTION', {
+      actorEmail: user!.email,
+      subAction: 'TRANSFER_TEAM',
+      teamId,
+      newOwnerId,
+    });
+
     setTeams((prev) => {
       const updated = prev.map((t) => (t.id === teamId ? { ...t, owner_id: newOwnerId } : t));
       persist(STORE_KEYS.TEAMS, updated);
       return updated;
     });
     logAction('admin_transfer_team', `Team ${teamId} ownership transferred to user ${newOwnerId}`);
-  }, [persist, logAction]);
+  }, [user, persist, logAction, syncCloudState]);
 
   const adminDeleteUser = useCallback(async (userId: string) => {
+    if (!isAppOwner(user)) return;
+    const target = users.find((u) => u.id === userId);
+    if (isAppOwner(target)) return;
+
+    await syncCloudState('ADMIN_ACTION', {
+      actorEmail: user!.email,
+      subAction: 'DELETE_USER',
+      targetUserId: userId,
+    });
+
     setUsers((prev) => {
       const updated = prev.filter((u) => u.id !== userId);
       persist(STORE_KEYS.ALL_USERS, updated);
       return updated;
     });
+    setMembers((prev) => {
+      const updated = prev.filter((m) => m.user_id !== userId);
+      persist(STORE_KEYS.MEMBERS, updated);
+      return updated;
+    });
     logAction('admin_delete_user', `User ID ${userId} was deleted by admin`);
-  }, [persist, logAction]);
+  }, [user, users, persist, logAction, syncCloudState]);
 
   // Team Group Chat & Voice Notes Engine
   const sendChatMessage = useCallback(
@@ -1975,19 +2382,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setChatMessages((prev) => {
         const updated = [...prev, newMsg];
         persist(STORE_KEYS.CHAT_MESSAGES, updated);
-        syncCloudState('SEND_MESSAGE', { message: newMsg }).catch(() => {});
         return updated;
       });
+      const cloudRes = await syncCloudState('SEND_MESSAGE', { message: newMsg });
 
-      // Dispatch notifications for mentioned users
-      if (detectedMentions.length > 0) {
+      if (!cloudRes && detectedMentions.length > 0) {
+        const teamMemberIds = new Set(
+          members.filter((m) => m.team_id === input.teamId).map((m) => m.user_id)
+        );
         detectedMentions.forEach((mentionName) => {
-          const target = users.find((u) => u.username && u.username.toLowerCase() === mentionName.toLowerCase());
+          const target = users.find(
+            (u) =>
+              teamMemberIds.has(u.id) &&
+              u.username &&
+              u.username.toLowerCase() === mentionName.toLowerCase()
+          );
           if (target && target.id !== user.id) {
             const notif: AppNotification = {
-              id: `notif_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+              id: `notif_mention_${newMsg.id}_${target.id}`,
               user_id: target.id,
-              kind: 'general',
+              kind: 'chat_mention',
               title: `${user.name} (@${user.username}) mentioned you`,
               body: input.type === 'voice' ? 'Sent a voice note mentioning you' : (input.text || ''),
               read: false,
@@ -2005,7 +2419,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       logAction('chat_message', `Sent ${input.type || 'text'} message in team chat`);
       return { ok: true, message: newMsg };
     },
-    [user, users, persist, logAction]
+    [user, users, members, persist, logAction, syncCloudState]
   );
 
   // AI Agent Multi-Model Intelligence & Task Action Engine
@@ -2036,7 +2450,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       let actionData = engineResult.actionData;
 
-      // 4. If intent created or assigned a task, execute in state
+      // 4. If intent created or assigned a task, execute in state using present local time
       if (engineResult.actionType === 'task_assigned' && actionData) {
         const res = await createTask({
           teamId: actionData.teamId || null,
@@ -2048,7 +2462,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           priority: actionData.priority || 'medium',
           dueDate: actionData.dueDate || today,
           assignedDate: today,
-          startTime: '09:00',
           endTime: '18:00',
         });
 

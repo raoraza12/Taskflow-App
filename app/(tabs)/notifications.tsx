@@ -12,6 +12,8 @@ import Animated, { FadeInDown } from 'react-native-reanimated';
 export default function NotificationsScreen() {
   const {
     notifications,
+    pendingJoinRequests,
+    connections,
     markNotificationRead,
     markAllNotificationsRead,
     approveJoinRequest,
@@ -124,52 +126,89 @@ export default function NotificationsScreen() {
                   </Text>
 
                   {/* Direct Action for Join Requests */}
-                  {n.kind === 'join_request' && n.related_join_request_id && (
-                    <View style={styles.actionRow}>
-                      <Button
-                        title="Approve"
-                        size="sm"
-                        onPress={() => {
-                          approveJoinRequest(n.related_join_request_id!);
-                          markNotificationRead(n.id);
-                        }}
-                        style={{ marginRight: Spacing.sm }}
-                      />
-                      <Button
-                        title="Decline"
-                        variant="danger"
-                        size="sm"
-                        onPress={() => {
-                          declineJoinRequest(n.related_join_request_id!);
-                          markNotificationRead(n.id);
-                        }}
-                      />
-                    </View>
-                  )}
+                  {n.kind === 'join_request' && n.related_join_request_id && (() => {
+                    const isStillPending = pendingJoinRequests.some(
+                      (r) => r.id === n.related_join_request_id
+                    );
+                    if (!isStillPending) {
+                      return (
+                        <View style={styles.resolvedTag}>
+                          <Ionicons name="checkmark-done" size={14} color={currentTheme.colors.subtext} />
+                          <Text style={[styles.resolvedText, { color: currentTheme.colors.subtext }]}>
+                            Request handled
+                          </Text>
+                        </View>
+                      );
+                    }
+                    return (
+                      <View style={styles.actionRow}>
+                        <Button
+                          title="Approve"
+                          size="sm"
+                          onPress={() => {
+                            approveJoinRequest(n.related_join_request_id!);
+                            markNotificationRead(n.id);
+                          }}
+                          style={{ marginRight: Spacing.sm }}
+                        />
+                        <Button
+                          title="Decline"
+                          variant="danger"
+                          size="sm"
+                          onPress={() => {
+                            declineJoinRequest(n.related_join_request_id!);
+                            markNotificationRead(n.id);
+                          }}
+                        />
+                      </View>
+                    );
+                  })()}
 
                   {/* Direct Action for Teammate Connection Requests */}
-                  {n.kind === 'teammate_request' && n.related_connection_id && (
-                    <View style={styles.actionRow}>
-                      <Button
-                        title="Accept Teammate"
-                        size="sm"
-                        onPress={() => {
-                          acceptTeammateRequest(n.related_connection_id!);
-                          markNotificationRead(n.id);
-                        }}
-                        style={{ marginRight: Spacing.sm }}
-                      />
-                      <Button
-                        title="Decline"
-                        variant="danger"
-                        size="sm"
-                        onPress={() => {
-                          declineTeammateRequest(n.related_connection_id!);
-                          markNotificationRead(n.id);
-                        }}
-                      />
-                    </View>
-                  )}
+                  {n.kind === 'teammate_request' && n.related_connection_id && (() => {
+                    const conn = connections.find((c) => c.id === n.related_connection_id);
+                    if (conn && conn.status !== 'pending') {
+                      return (
+                        <View style={styles.resolvedTag}>
+                          <Ionicons
+                            name={conn.status === 'accepted' ? 'checkmark-circle' : 'close-circle'}
+                            size={14}
+                            color={conn.status === 'accepted' ? Colors.ok : Colors.subtext}
+                          />
+                          <Text
+                            style={[
+                              styles.resolvedText,
+                              { color: conn.status === 'accepted' ? Colors.ok : currentTheme.colors.subtext },
+                            ]}
+                          >
+                            {conn.status === 'accepted' ? 'Teammates Connected' : 'Declined'}
+                          </Text>
+                        </View>
+                      );
+                    }
+                    return (
+                      <View style={styles.actionRow}>
+                        <Button
+                          title="Accept Teammate"
+                          size="sm"
+                          onPress={() => {
+                            acceptTeammateRequest(n.related_connection_id!);
+                            markNotificationRead(n.id);
+                          }}
+                          style={{ marginRight: Spacing.sm }}
+                        />
+                        <Button
+                          title="Decline"
+                          variant="danger"
+                          size="sm"
+                          onPress={() => {
+                            declineTeammateRequest(n.related_connection_id!);
+                            markNotificationRead(n.id);
+                          }}
+                        />
+                      </View>
+                    );
+                  })()}
                 </View>
 
                 {!n.read && (
@@ -238,6 +277,16 @@ const styles = StyleSheet.create({
   actionRow: {
     flexDirection: 'row',
     marginTop: Spacing.sm,
+  },
+  resolvedTag: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    marginTop: Spacing.sm,
+  },
+  resolvedText: {
+    fontSize: 12,
+    fontWeight: '700',
   },
   markReadBtn: {
     padding: Spacing.xs,

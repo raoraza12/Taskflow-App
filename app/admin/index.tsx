@@ -59,6 +59,12 @@ export default function AdminScreen() {
   // Transfer Team Modal State
   const [transferringTeam, setTransferringTeam] = useState<Team | null>(null);
 
+  // Inspected User's Tasks (declared before any conditional return to satisfy Rules of Hooks)
+  const inspectedUserTasks = useMemo(() => {
+    if (!inspectedUser) return [];
+    return tasks.filter((t) => t.assignee_id === inspectedUser.id);
+  }, [inspectedUser, tasks]);
+
   // If user is not the App Owner (Ali Raza), strictly show 403 Restricted Access Screen
   const isOwner = isAppOwner(user);
   if (!isOwner) {
@@ -108,12 +114,6 @@ export default function AdminScreen() {
     const matchesStatus = taskFilterStatus === 'all' || t.status === taskFilterStatus;
     return matchesSearch && matchesStatus;
   });
-
-  // Inspected User's Tasks
-  const inspectedUserTasks = useMemo(() => {
-    if (!inspectedUser) return [];
-    return tasks.filter((t) => t.assignee_id === inspectedUser.id);
-  }, [inspectedUser, tasks]);
 
   // Handlers
   const handleToggleAdmin = async (targetUser: Profile) => {
@@ -591,7 +591,18 @@ export default function AdminScreen() {
                   label={inspectedUser?.status === 'suspended' ? 'Suspended' : 'Active Account'}
                   variant={inspectedUser?.status === 'suspended' ? 'danger' : 'success'}
                 />
-                <Badge label="Google OAuth Verified" variant="success" />
+                <Badge
+                  label={
+                    inspectedUser?.google_id && !inspectedUser.google_id.startsWith('local_')
+                      ? 'Google OAuth Verified'
+                      : 'Email Account'
+                  }
+                  variant={
+                    inspectedUser?.google_id && !inspectedUser.google_id.startsWith('local_')
+                      ? 'success'
+                      : 'muted'
+                  }
+                />
               </View>
 
               {/* Admin Actions Bar */}

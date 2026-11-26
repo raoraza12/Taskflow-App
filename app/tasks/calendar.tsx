@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { StyleSheet, View, Text, Pressable } from 'react-native';
-import { useApp } from '../../src/context/AppContext';
+import { useApp, isAppOwner } from '../../src/context/AppContext';
+import { showAlert } from '../../src/lib/alerts';
 import { Colors, Radius, Spacing, Typography } from '../../src/constants/colors';
 import { ScreenWrapper } from '../../src/components/ScreenWrapper';
 import { Card } from '../../src/components/Card';
@@ -13,7 +14,7 @@ import { AnimatedTaskCard } from '../../src/components/AnimatedTaskCard';
 import { Task } from '../../src/types/database';
 
 export default function CalendarScreen() {
-  const { tasks, today, theme, updateTask } = useApp();
+  const { user, tasks, today, theme, updateTask, submitTask, canManageTeam } = useApp();
   const currentTheme = THEMES[theme] || THEMES.snow;
   const router = useRouter();
   const [selectedDay, setSelectedDay] = useState(today);
@@ -38,9 +39,30 @@ export default function CalendarScreen() {
 
   const dayTasks = tasks.filter((t) => t.due_date === selectedDay);
 
-  const toggleTaskStatus = (task: Task) => {
+  const isLeaderOrOwner = (t: Task) =>
+    canManageTeam(t.team_id ?? '') ||
+    t.created_by_id === user?.id ||
+    isAppOwner(user) ||
+    Boolean(t.is_personal || !t.team_id);
+
+  const toggleTaskStatus = async (task: Task) => {
+    const canManage = isLeaderOrOwner(task);
+    if (!canManage && task.assignee_id !== user?.id) {
+      showAlert('View Only', 'Only the assignee or Team Leader can update this task status.');
+      return;
+    }
+    if (!canManage) {
+      if (task.status === 'todo') {
+        await updateTask(task.id, { status: 'in_progress' });
+      } else if (task.status === 'in_progress') {
+        await submitTask(task.id, 'Submitted for review');
+      } else {
+        showAlert('In Review', 'Awaiting Team Leader approval to complete.');
+      }
+      return;
+    }
     const nextStatus = task.status === 'done' ? 'todo' : 'done';
-    updateTask(task.id, { status: nextStatus });
+    await updateTask(task.id, { status: nextStatus });
   };
 
   return (
@@ -130,6 +152,8 @@ export default function CalendarScreen() {
             task={t}
             index={idx}
             currentTheme={currentTheme}
+            canEdit={isLeaderOrOwner(t)}
+            canToggleStatus={isLeaderOrOwner(t) || t.assignee_id === user?.id}
             onToggleStatus={toggleTaskStatus}
             onPress={() => router.push({ pathname: '/tasks/edit', params: { taskId: t.id } })}
           />

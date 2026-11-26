@@ -1110,16 +1110,323 @@ describe('10. Teammate Connections & Task Permission Guard', () => {
 });
 
 // ==========================================
-// TEST SUMMARY REPORT
+// 11. REAL API/SYNC.JS INTEGRATION SUITE (Actual Production Handler)
 // ==========================================
-console.log(bold('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'));
-console.log(bold(`TOTAL TESTS RUN : ${totalTests}`));
-console.log(bold(`TESTS PASSED    : \x1b[32m${passedTests}\x1b[0m`));
-if (failedTests > 0) {
-  console.log(bold(`TESTS FAILED    : \x1b[31m${failedTests}\x1b[0m`));
-  process.exit(1);
-} else {
-  console.log(bold(`ALL TESTS PASSED: \x1b[32m100% SUCCESS\x1b[0m`));
-  console.log(bold('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n'));
+async function runRealApiIntegrationSuite() {
+  console.log(`\n${bold(cyan('━━━ 11. Real api/sync.js Serverless Handler Integration Tests ━━━'))}`);
+
+  const path = require('path');
+  const blobModulePath = require.resolve('@vercel/blob');
+  const syncPath = path.resolve(__dirname, '..', 'api', 'sync.js');
+  const originalBlobCache = require.cache[blobModulePath];
+  const originalFetch = global.fetch;
+
+  const memBlobs = new Map();
+  require.cache[blobModulePath] = {
+    id: blobModulePath,
+    filename: blobModulePath,
+    loaded: true,
+    exports: {
+      put: async (pathname, body) => {
+        const buf = Buffer.isBuffer(body) ? body.toString('utf8') : String(body);
+        const url = `https://blob.test/${pathname}`;
+        memBlobs.set(pathname, { pathname, url, content: buf });
+        return { url, pathname };
+      },
+      list: async ({ prefix = '' } = {}) => {
+        const blobs = [];
+        for (const entry of memBlobs.values()) {
+          if (entry.pathname.startsWith(prefix)) blobs.push(entry);
+        }
+        return { blobs };
+      },
+    },
+  };
+
+  global.fetch = async (url) => {
+    const str = String(url);
+    if (str.includes('taskflow_cloud_state.json')) {
+      const entry = memBlobs.get('taskflow_cloud_state.json');
+      if (entry) {
+        return { ok: true, status: 200, json: async () => JSON.parse(entry.content) };
+      }
+      return { ok: false, status: 404, json: async () => ({}) };
+    }
+    return { ok: false, status: 404, json: async () => ({}) };
+  };
+
+  delete require.cache[syncPath];
+  const handler = require(syncPath);
+
+  async function callApi(method, body = {}) {
+    let statusCode = 200;
+    let payload = null;
+    const req = { method, body };
+    const res = {
+      setHeader: () => {},
+      status: (code) => {
+        statusCode = code;
+        return res;
+      },
+      json: (obj) => {
+        payload = obj;
+        return res;
+      },
+      end: () => res,
+    };
+    await handler(req, res);
+    return { status: statusCode, data: payload };
+  }
+
+  async function itAsync(name, fn) {
+    totalTests++;
+    try {
+      await fn();
+      passedTests++;
+      console.log(`  ${green(name)}`);
+    } catch (err) {
+      failedTests++;
+      console.error(`  ${red(name)}`);
+      console.error(`    ${err.message}`);
+    }
+  }
+
+  try {
+    await itAsync('GET returns normalized public state without leaking authCredentials', async () => {
+      const r = await callApi('GET');
+      assert.strictEqual(r.status, 200);
+      assert.strictEqual(r.data.ok, true);
+      assert.strictEqual(r.data.state.authCredentials, undefined);
+      assert.ok(r.data.state.deletedIds);
+    });
+
+    let leaderUser = null;
+    let memberUser = null;
+    let outsiderUser = null;
+
+    await itAsync('REGISTER_USER & LOGIN_USER verify scrypt hashed passwords and reject bad credentials', async () => {
+      const regLeader = await callApi('POST', {
+        action: 'REGISTER_USER',
+        payload: {
+          profile: { id: 'u_owner', name: 'Ali Raza', email: 'aliraza.lead@gmail.com', username: 'ali_lead' },
+          password: 'OwnerPass#1',
+        },
+      });
+      assert.strictEqual(regLeader.status, 200);
+      assert.strictEqual(regLeader.data.user.isAdmin, true);
+      leaderUser = regLeader.data.user;
+
+      const regMember = await callApi('POST', {
+        action: 'REGISTER_USER',
+        payload: {
+          profile: { id: 'u_mem', name: 'Sarah Khan', email: 'sarah.dev@gmail.com', username: 'sarah_k' },
+          password: 'MemberPass#1',
+        },
+      });
+      assert.strictEqual(regMember.status, 200);
+      assert.strictEqual(regMember.data.user.isAdmin, false);
+      memberUser = regMember.data.user;
+
+      const regOutsider = await callApi('POST', {
+        action: 'REGISTER_USER',
+        payload: {
+          profile: { id: 'u_out', name: 'Ali Raza Imposter', email: 'fake.aliraza@gmail.com', username: 'fake_ali' },
+          password: 'OutPass#1',
+        },
+      });
+      assert.strictEqual(regOutsider.status, 200);
+      assert.strictEqual(regOutsider.data.user.isAdmin, false);
+      outsiderUser = regOutsider.data.user;
+
+      const badLogin = await callApi('POST', {
+        action: 'LOGIN_USER',
+        payload: { email: 'sarah.dev@gmail.com', password: 'WrongPassword' },
+      });
+      assert.strictEqual(badLogin.status, 401);
+      assert.strictEqual(badLogin.data.ok, false);
+
+      const goodLogin = await callApi('POST', {
+        action: 'LOGIN_USER',
+        payload: { email: 'sarah.dev@gmail.com', password: 'MemberPass#1' },
+      });
+      assert.strictEqual(goodLogin.status, 200);
+      assert.strictEqual(goodLogin.data.user.id, 'u_mem');
+    });
+
+    await itAsync('GOOGLE_LOGIN preserves existing canonical user.id and prevents profile hijacking', async () => {
+      const g = await callApi('POST', {
+        action: 'GOOGLE_LOGIN',
+        payload: {
+          profile: { id: 'u_new_random_id', name: 'Sarah Google', email: 'sarah.dev@gmail.com', google_id: 'g_123' },
+        },
+      });
+      assert.strictEqual(g.status, 200);
+      assert.strictEqual(g.data.user.id, 'u_mem');
+    });
+
+    await itAsync('CREATE_TEAM rejects duplicate names case-insensitively across devices', async () => {
+      const t1 = await callApi('POST', {
+        action: 'CREATE_TEAM',
+        payload: {
+          team: { id: 't_1', name: 'Solution Tech Global', invite_code: '7DP9VU', join_password: 'pass1234', owner_id: leaderUser.id, created_at: new Date().toISOString() },
+          member: { id: 'm_1', team_id: 't_1', user_id: leaderUser.id, role: 'owner', joined_at: new Date().toISOString(), profile: leaderUser },
+        },
+      });
+      assert.strictEqual(t1.status, 200);
+
+      const dup = await callApi('POST', {
+        action: 'CREATE_TEAM',
+        payload: {
+          team: { id: 't_2', name: 'solution tech global', invite_code: 'OTHER1', join_password: 'pass1234', owner_id: memberUser.id, created_at: new Date().toISOString() },
+        },
+      });
+      assert.strictEqual(dup.status, 400);
+      assert.strictEqual(dup.data.ok, false);
+    });
+
+    await itAsync('REQUEST_JOIN validates name+code match & password, and APPROVE_JOIN sends atomic single announcement', async () => {
+      const badPass = await callApi('POST', {
+        action: 'REQUEST_JOIN',
+        payload: { teamName: 'Solution Tech Global', inviteCode: '7DP9VU', joinPassword: 'wrong', user: memberUser },
+      });
+      assert.strictEqual(badPass.status, 400);
+
+      const mismatchedName = await callApi('POST', {
+        action: 'REQUEST_JOIN',
+        payload: { teamName: 'Other Team Name', inviteCode: '7DP9VU', joinPassword: 'pass1234', user: memberUser },
+      });
+      assert.strictEqual(mismatchedName.status, 400);
+
+      const validReq = await callApi('POST', {
+        action: 'REQUEST_JOIN',
+        payload: { teamName: 'Solution Tech Global', inviteCode: '7DP9VU', joinPassword: 'pass1234', user: memberUser },
+      });
+      assert.strictEqual(validReq.status, 200);
+      assert.strictEqual(validReq.data.pendingApproval, true);
+      const reqId = validReq.data.state.joinRequests[0].id;
+      assert.ok(validReq.data.state.notifications.some((n) => n.user_id === leaderUser.id && n.kind === 'join_request'));
+
+      const approve = await callApi('POST', {
+        action: 'APPROVE_JOIN',
+        payload: { requestId: reqId },
+      });
+      assert.strictEqual(approve.status, 200);
+      assert.ok(approve.data.state.members.some((m) => m.team_id === 't_1' && m.user_id === memberUser.id));
+      const welcomes = approve.data.state.chatMessages.filter((m) => m.team_id === 't_1');
+      assert.strictEqual(welcomes.length, 1);
+    });
+
+    await itAsync('SAVE_TASK blocks non-leader approval/title changes, and DELETE_TASK + MERGE honors tombstones', async () => {
+      const createRes = await callApi('POST', {
+        action: 'SAVE_TASK',
+        payload: {
+          actorId: leaderUser.id,
+          actorName: leaderUser.name,
+          task: { id: 'task_99', team_id: 't_1', is_personal: false, assignee_id: memberUser.id, created_by_id: leaderUser.id, title: 'Original Spec', description: '', status: 'todo', priority: 'high', assigned_date: '2026-11-26', due_date: '2026-11-27', start_time: '09:00', end_time: '18:00', created_at: '2026-11-26T00:00:00Z', updated_at: '2026-11-26T00:00:00Z' },
+        },
+      });
+      assert.strictEqual(createRes.status, 200);
+
+      const illegalDone = await callApi('POST', {
+        action: 'SAVE_TASK',
+        payload: {
+          actorId: memberUser.id,
+          actorName: memberUser.name,
+          task: { ...createRes.data.state.tasks[0], status: 'done' },
+        },
+      });
+      assert.strictEqual(illegalDone.status, 403);
+
+      const allowedProgress = await callApi('POST', {
+        action: 'SAVE_TASK',
+        payload: {
+          actorId: memberUser.id,
+          actorName: memberUser.name,
+          task: { ...createRes.data.state.tasks[0], status: 'in_progress' },
+        },
+      });
+      assert.strictEqual(allowedProgress.status, 200);
+
+      const delRes = await callApi('POST', {
+        action: 'DELETE_TASK',
+        payload: { taskId: 'task_99', actorId: leaderUser.id },
+      });
+      assert.strictEqual(delRes.status, 200);
+      assert.strictEqual(delRes.data.state.tasks.length, 0);
+
+      const staleMerge = await callApi('POST', {
+        action: 'MERGE',
+        payload: {
+          tasks: [{ id: 'task_99', team_id: 't_1', title: 'Zombie Task', status: 'todo', created_at: '2026-11-26T00:00:00Z', updated_at: '2026-11-26T00:00:00Z' }],
+        },
+      });
+      assert.strictEqual(staleMerge.status, 200);
+      assert.strictEqual(staleMerge.data.state.tasks.length, 0);
+    });
+
+    await itAsync('SEND_MESSAGE scopes @mentions to team members and ADMIN_ACTION enforces strict owner email', async () => {
+      const msgRes = await callApi('POST', {
+        action: 'SEND_MESSAGE',
+        payload: {
+          message: {
+            id: 'msg_1',
+            team_id: 't_1',
+            user_id: leaderUser.id,
+            user_name: leaderUser.name,
+            user_username: leaderUser.username,
+            text: 'Hey @sarah_k and @fake_ali check this!',
+            type: 'text',
+            mentions: ['sarah_k', 'fake_ali'],
+            created_at: new Date().toISOString(),
+          },
+        },
+      });
+      assert.strictEqual(msgRes.status, 200);
+      assert.ok(msgRes.data.state.notifications.some((n) => n.user_id === memberUser.id && n.kind === 'chat_mention'));
+      assert.ok(!msgRes.data.state.notifications.some((n) => n.user_id === outsiderUser.id));
+
+      const fakeAdmin = await callApi('POST', {
+        action: 'ADMIN_ACTION',
+        payload: { actorEmail: outsiderUser.email, subAction: 'TOGGLE_ADMIN', targetUserId: memberUser.id },
+      });
+      assert.strictEqual(fakeAdmin.status, 403);
+
+      const realAdmin = await callApi('POST', {
+        action: 'ADMIN_ACTION',
+        payload: { actorEmail: leaderUser.email, subAction: 'TOGGLE_STATUS', targetUserId: outsiderUser.id },
+      });
+      assert.strictEqual(realAdmin.status, 200);
+      assert.strictEqual(realAdmin.data.state.users.find((u) => u.id === outsiderUser.id).status, 'suspended');
+    });
+
+    await itAsync('UPLOAD_MEDIA persists base64 media to Vercel Blob CDN URL', async () => {
+      const up = await callApi('POST', {
+        action: 'UPLOAD_MEDIA',
+        payload: { base64Data: 'data:audio/mp4;base64,AAAA', folder: 'voice', extension: 'm4a', contentType: 'audio/mp4' },
+      });
+      assert.strictEqual(up.status, 200);
+      assert.ok(up.data.url.startsWith('https://blob.test/'));
+    });
+  } finally {
+    if (originalBlobCache) require.cache[blobModulePath] = originalBlobCache;
+    else delete require.cache[blobModulePath];
+    global.fetch = originalFetch;
+  }
 }
+
+runRealApiIntegrationSuite().then(() => {
+  // ==========================================
+  // TEST SUMMARY REPORT
+  // ==========================================
+  console.log(bold('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'));
+  console.log(bold(`TOTAL TESTS RUN : ${totalTests}`));
+  console.log(bold(`TESTS PASSED    : \x1b[32m${passedTests}\x1b[0m`));
+  if (failedTests > 0) {
+    console.log(bold(`TESTS FAILED    : \x1b[31m${failedTests}\x1b[0m`));
+    process.exit(1);
+  } else {
+    console.log(bold(`ALL TESTS PASSED: \x1b[32m100% SUCCESS\x1b[0m`));
+    console.log(bold('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n'));
+  }
+});
 

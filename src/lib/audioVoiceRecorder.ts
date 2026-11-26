@@ -84,18 +84,29 @@ export class VoiceRecorderService {
         },
       });
 
-      let mimeType = 'audio/webm';
+      let mimeType = '';
       if (typeof MediaRecorder !== 'undefined' && typeof MediaRecorder.isTypeSupported === 'function') {
-        if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
-          mimeType = 'audio/webm;codecs=opus';
-        } else if (MediaRecorder.isTypeSupported('audio/webm')) {
-          mimeType = 'audio/webm';
-        } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
-          mimeType = 'audio/mp4';
+        const candidates = [
+          'audio/mp4;codecs=mp4a.40.2',
+          'audio/mp4',
+          'audio/webm;codecs=opus',
+          'audio/webm',
+        ];
+        for (const cand of candidates) {
+          if (MediaRecorder.isTypeSupported(cand)) {
+            mimeType = cand;
+            break;
+          }
         }
       }
 
-      this.mediaRecorder = new MediaRecorder(this.stream, { mimeType });
+      try {
+        this.mediaRecorder = mimeType
+          ? new MediaRecorder(this.stream, { mimeType })
+          : new MediaRecorder(this.stream);
+      } catch {
+        this.mediaRecorder = new MediaRecorder(this.stream);
+      }
       this.mediaRecorder.ondataavailable = (event: BlobEvent) => {
         if (event.data && event.data.size > 0) {
           this.audioChunks.push(event.data);

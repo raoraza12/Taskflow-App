@@ -32,7 +32,6 @@ export default function LockScreen() {
     hasAppLockPin,
     unlockApp,
     setAppLockPin,
-    resetAppLockPin,
     sendPasswordResetOTP,
     verifyPasswordResetOTP,
     resetPasswordWithOTP,
@@ -192,7 +191,7 @@ export default function LockScreen() {
 
     setOtpLoading(true);
     try {
-      const res = await resetPasswordWithOTP(resetEmail, otpCode, newPassword);
+      const res = await resetPasswordWithOTP(resetEmail, otpCode, newPassword, 'applock');
       if (res.ok) {
         setResetSuccess(true);
         setTimeout(() => {

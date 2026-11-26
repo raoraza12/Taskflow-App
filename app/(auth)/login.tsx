@@ -12,7 +12,7 @@ import {
   Pressable,
   Image,
 } from 'react-native';
-import Animated, { FadeInDown, FadeInUp } from 'react-native-reanimated';
+import Animated, { FadeInDown } from 'react-native-reanimated';
 import { useApp } from '../../src/context/AppContext';
 import { Colors, Radius, Spacing, Typography } from '../../src/constants/colors';
 import { Button } from '../../src/components/Button';
@@ -28,7 +28,6 @@ import {
   parseGoogleCredential,
 } from '../../src/lib/googleAuth';
 import * as WebBrowser from 'expo-web-browser';
-import * as AuthSession from 'expo-auth-session';
 import * as Linking from 'expo-linking';
 
 if (Platform.OS !== 'web') {
@@ -165,6 +164,8 @@ export default function LoginScreen() {
     if (Platform.OS !== 'web' || typeof window === 'undefined') return;
 
     const hash = window.location.hash;
+    const search = window.location.search || '';
+    if ((hash + search).includes('state=native_app')) return;
     if (hash && hash.includes('access_token')) {
       const params = new URLSearchParams(hash.substring(1));
       const accessToken = params.get('access_token');

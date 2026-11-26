@@ -247,7 +247,7 @@ export default function ProfileScreen() {
   };
 
   return (
-    <ScreenWrapper title="User Dashboard" subtitle="Personal Productivity & Account Portal">
+    <ScreenWrapper title="My Profile" subtitle="Personal Productivity & Account Portal">
       {/* 1. Super Admin VIP Banner (STRICTLY for App Owner Ali Raza Only) */}
       {isAppOwner(user) && (
         <Animated.View entering={FadeInDown.duration(300)}>
@@ -359,8 +359,14 @@ export default function ProfileScreen() {
               )}
 
               <View style={[styles.verifiedBadge, { backgroundColor: currentTheme.colors.primaryLight }]}>
-                <Ionicons name="checkmark-circle" size={13} color={currentTheme.colors.primary} />
-                <Text style={[styles.verifiedText, { color: currentTheme.colors.primary }]}>Google Verified</Text>
+                <Ionicons
+                  name={user?.google_id && !user.google_id.startsWith('local_') ? 'logo-google' : 'checkmark-circle'}
+                  size={13}
+                  color={currentTheme.colors.primary}
+                />
+                <Text style={[styles.verifiedText, { color: currentTheme.colors.primary }]}>
+                  {user?.google_id && !user.google_id.startsWith('local_') ? 'Google Verified' : 'Email Verified'}
+                </Text>
               </View>
             </View>
           </View>

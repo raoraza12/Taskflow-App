@@ -1,4 +1,4 @@
-import { Task, Team, TeamMember, Profile, TaskPriority, TaskStatus } from '../types/database';
+import { Task, Team, TeamMember, Profile, TaskPriority } from '../types/database';
 
 export interface AIContextData {
   user: Profile | null;
@@ -121,10 +121,31 @@ export function executeEdgeIntelligenceTier(
   tier: AIEngineResult['modelTier'] = 'edge_local'
 ): AIEngineResult {
   const lower = prompt.toLowerCase();
-  const { user, users, teams, tasks, today } = context;
+  const { user, users, teams, members, tasks, today } = context;
 
-  // Active Team (if any)
+  // Active Team & strict team-scoped members (never leak global seed/external users)
   const activeTeam = teams[0];
+  const activeTeamMembers = activeTeam
+    ? members.filter((m) => m.team_id === activeTeam.id)
+    : [];
+  const activeTeamProfiles: Profile[] = activeTeamMembers.map((m) => {
+    const synced = users.find((u) => u.id === m.user_id);
+    return (
+      synced ||
+      m.profile || {
+        id: m.user_id,
+        google_id: '',
+        name: 'Team Member',
+        username: 'member',
+        email: '',
+        email_verified: true,
+        created_at: m.joined_at,
+      }
+    );
+  });
+  const scopedProfiles =
+    activeTeamProfiles.length > 0 ? activeTeamProfiles : user ? [user] : [];
+
   const myTasks = tasks.filter((t) => t.assignee_id === user?.id);
   const myDueToday = myTasks.filter((t) => t.due_date === today);
   const overdueTasks = tasks.filter((t) => t.status !== 'done' && t.due_date < today);
@@ -139,18 +160,29 @@ export function executeEdgeIntelligenceTier(
     /is banday ko/i.test(lower);
 
   if (isCreateOrAssign) {
-    let targetAssignee = user || users[0];
+    let targetAssignee = user || scopedProfiles[0];
     const mentionMatch = prompt.match(/@([a-zA-Z0-9_]+)/);
     if (mentionMatch) {
-      const found = users.find((u) => u.username?.toLowerCase() === mentionMatch[1].toLowerCase());
+      const found = scopedProfiles.find(
+        (u) => u.username?.toLowerCase() === mentionMatch[1].toLowerCase()
+      );
       if (found) targetAssignee = found;
     } else {
-      for (const u of users) {
-        if (lower.includes(u.name.toLowerCase())) {
+      for (const u of scopedProfiles) {
+        if (u.name && lower.includes(u.name.toLowerCase())) {
           targetAssignee = u;
           break;
         }
       }
+    }
+
+    if (!targetAssignee) {
+      return {
+        reply: 'Please sign in first so I know who to assign this task to.',
+        actionType: 'clarification',
+        modelUsed: modelName,
+        modelTier: tier,
+      };
     }
 
     let priority: TaskPriority = 'medium';
@@ -222,12 +254,21 @@ export function executeEdgeIntelligenceTier(
       };
     }
 
-    const memberListStr = users
-      .map((u) => `• **${u.name}** (@${u.username || 'member'}) · ${u.isAdmin ? '👑 Super Admin / Leader' : '💼 Teammate'}`)
+    const memberListStr = activeTeamMembers
+      .map((m) => {
+        const prof = scopedProfiles.find((p) => p.id === m.user_id) || m.profile;
+        const roleLabel =
+          m.role === 'owner'
+            ? '👑 Team Leader'
+            : m.role === 'admin'
+            ? '🛡️ Team Admin'
+            : '💼 Teammate';
+        return `• **${prof?.name || 'Member'}** (@${prof?.username || 'member'}) · ${roleLabel}`;
+      })
       .join('\n');
 
     return {
-      reply: `🏢 **Team Workspace: ${activeTeam.name}**\n\nTotal Teammates: **${users.length} members**\n\n${memberListStr}\n\n• 🔑 **Invite Code**: \`${activeTeam.invite_code}\` (Safe to share with new teammates).\n*(Note: Passwords and access PINs are strictly redacted for enterprise security).*`,
+      reply: `🏢 **Team Workspace: ${activeTeam.name}**\n\nTotal Teammates: **${activeTeamMembers.length} member${activeTeamMembers.length === 1 ? '' : 's'}**\n\n${memberListStr || '• No members synced yet.'}\n\n• 🔑 **Invite Code**: \`${activeTeam.invite_code}\` (Safe to share with new teammates).\n*(Note: Passwords and access PINs are strictly redacted for enterprise security).*`,
       actionType: 'info',
       modelUsed: modelName,
       modelTier: tier,
@@ -238,11 +279,12 @@ export function executeEdgeIntelligenceTier(
   let askedTeammate: Profile | null = null;
   const targetMention = prompt.match(/@([a-zA-Z0-9_]+)/);
   if (targetMention) {
-    askedTeammate = users.find((u) => u.username?.toLowerCase() === targetMention[1].toLowerCase()) || null;
+    askedTeammate =
+      scopedProfiles.find((u) => u.username?.toLowerCase() === targetMention[1].toLowerCase()) || null;
   }
   if (!askedTeammate) {
-    for (const u of users) {
-      if (lower.includes(u.name.toLowerCase()) && (lower.includes('task') || lower.includes('kaam') || lower.includes('status') || lower.includes('kya'))) {
+    for (const u of scopedProfiles) {
+      if (u.name && lower.includes(u.name.toLowerCase()) && (lower.includes('task') || lower.includes('kaam') || lower.includes('status') || lower.includes('kya'))) {
         askedTeammate = u;
         break;
       }
@@ -384,7 +426,7 @@ export function executeEdgeIntelligenceTier(
     const completionRate = total > 0 ? Math.round((completedTasks.length / total) * 100) : 0;
 
     return {
-      reply: `📊 **Active Workspace Governance Status:**\n\n• 📋 **Total Sprints**: ${total}\n• ⏰ **Due Today**: ${myDueToday.length}\n• ⚡ **In Progress**: ${inProgressTasks.length}\n• 🚀 **In Review (Submitted)**: ${inReviewTasks.length}\n• ✅ **Completed**: ${completedTasks.length} (${completionRate}% Velocity)\n• ⚠️ **Overdue**: ${overdueTasks.length}\n• 👥 **Active Teammates**: ${users.length} members\n\nAap kisi bhi specific member, deadline ya task ke baray mein mazeed detail pooch sakte hain!`,
+      reply: `📊 **Active Workspace Governance Status:**\n\n• 📋 **Total Sprints**: ${total}\n• ⏰ **Due Today**: ${myDueToday.length}\n• ⚡ **In Progress**: ${inProgressTasks.length}\n• 🚀 **In Review (Submitted)**: ${inReviewTasks.length}\n• ✅ **Completed**: ${completedTasks.length} (${completionRate}% Velocity)\n• ⚠️ **Overdue**: ${overdueTasks.length}\n• 👥 **Active Teammates**: ${activeTeam ? activeTeamMembers.length : 1} members\n\nAap kisi bhi specific member, deadline ya task ke baray mein mazeed detail pooch sakte hain!`,
       actionType: 'info',
       modelUsed: modelName,
       modelTier: tier,

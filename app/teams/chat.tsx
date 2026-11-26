@@ -23,31 +23,50 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useApp } from '../../src/context/AppContext';
 import { Colors, Radius, Spacing, Typography } from '../../src/constants/colors';
-import { useRouter, useLocalSearchParams } from 'expo-router';
+import { useRouter, useLocalSearchParams, usePathname } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { ChatMessage, Profile } from '../../src/types/database';
 import { voiceRecorder, VoicePlayerService } from '../../src/lib/audioVoiceRecorder';
+import { uploadCloudMedia } from '../../src/lib/cloudMedia';
 import { triggerHaptic } from '../../src/lib/haptics';
 import { UserProfileModal } from '../../src/components/UserProfileModal';
 
 export default function TeamChatScreen() {
   const router = useRouter();
+  const pathname = usePathname();
+  const isEmbeddedTab = pathname === '/chat' || !router.canGoBack();
   const params = useLocalSearchParams<{ teamId?: string }>();
-  const { user, users, teams, chatMessages, sendChatMessage, openAIAssistant } = useApp();
+  const { user, users, teams, chatMessages, getTeamMembers, sendChatMessage, openAIAssistant } = useApp();
   const [viewProfileUser, setViewProfileUser] = useState<Profile | null>(null);
 
-  // Active Team selection (supports switching between multiple teams)
+  // Active Team selection (auto-recovers if selected team was deleted/left)
   const [selectedTeamId, setSelectedTeamId] = useState<string>(params.teamId || teams[0]?.id || '');
   const activeTeam = teams.find((t) => t.id === selectedTeamId) || teams[0];
   const teamMessages = chatMessages.filter((m) => m.team_id === activeTeam?.id);
 
+  const teamMemberProfiles: Profile[] = React.useMemo(() => {
+    if (!activeTeam) return user ? [user] : [];
+    const raw = getTeamMembers(activeTeam.id);
+    const list: Profile[] = [];
+    const seen = new Set<string>();
+    raw.forEach((m) => {
+      const p = users.find((u) => u.id === m.user_id) || m.profile;
+      if (p && !seen.has(p.id)) {
+        seen.add(p.id);
+        list.push(p);
+      }
+    });
+    if (list.length === 0 && user) list.push(user);
+    return list;
+  }, [activeTeam, getTeamMembers, users, user]);
+
   useEffect(() => {
     if (params.teamId) {
       setSelectedTeamId(params.teamId);
-    } else if (!selectedTeamId && teams.length > 0) {
+    } else if ((!selectedTeamId || !teams.some((t) => t.id === selectedTeamId)) && teams.length > 0) {
       setSelectedTeamId(teams[0].id);
     }
-  }, [params.teamId, teams]);
+  }, [params.teamId, teams, selectedTeamId]);
 
   const [inputText, setInputText] = useState('');
   const [showMentionPopup, setShowMentionPopup] = useState(false);
@@ -73,6 +92,17 @@ export default function TeamChatScreen() {
   }, []);
 
   const scrollViewRef = useRef<ScrollView>(null);
+  const prevMessageCountRef = useRef<number>(0);
+
+  // Smart scroll: only scroll to bottom when new messages arrive or channel switches
+  useEffect(() => {
+    if (teamMessages.length > prevMessageCountRef.current) {
+      setTimeout(() => {
+        scrollViewRef.current?.scrollToEnd({ animated: true });
+      }, 80);
+    }
+    prevMessageCountRef.current = teamMessages.length;
+  }, [teamMessages.length, activeTeam?.id]);
 
   // Pulsing animation for recording dot
   const pulseVal = useSharedValue(1);
@@ -86,7 +116,7 @@ export default function TeamChatScreen() {
     } else {
       pulseVal.value = 1;
     }
-  }, [isRecording]);
+  }, [isRecording, pulseVal]);
 
   const pulseStyle = useAnimatedStyle(() => ({
     transform: [{ scale: pulseVal.value }],
@@ -122,8 +152,8 @@ export default function TeamChatScreen() {
     setShowMentionPopup(false);
   };
 
-  // Filter team users for autocomplete
-  const filteredUsers = users.filter((u) => {
+  // Filter active team members ONLY for @mention autocomplete
+  const filteredUsers = teamMemberProfiles.filter((u) => {
     if (!mentionQuery) return true;
     return (
       (u.username && u.username.toLowerCase().includes(mentionQuery)) ||
@@ -149,17 +179,17 @@ export default function TeamChatScreen() {
     }, 100);
   };
 
-  // Start Voice Recording (Real Microphone Capture)
+  // Start Voice Recording (Real Microphone Capture — verify permission BEFORE entering recording UI)
   const startRecording = async () => {
     setMicError('');
-    setIsRecording(true);
-    setRecordDuration(0);
-
     const res = await voiceRecorder.startRecording();
-    if (!res.ok && res.error) {
-      setMicError(res.error);
+    if (!res.ok) {
+      setMicError(res.error || 'Microphone permission denied or unavailable.');
+      return;
     }
 
+    setIsRecording(true);
+    setRecordDuration(0);
     recordTimerRef.current = setInterval(() => {
       setRecordDuration((prev) => prev + 1);
     }, 1000);
@@ -174,7 +204,7 @@ export default function TeamChatScreen() {
     setMicError('');
   };
 
-  // Send Voice Note with Real Audio Blob & Base64 persistence
+  // Send Voice Note with Real Audio Upload & Cross-Device Playback
   const sendVoiceNote = async () => {
     if (!activeTeam) return;
     if (recordTimerRef.current) clearInterval(recordTimerRef.current);
@@ -183,14 +213,34 @@ export default function TeamChatScreen() {
     const finalDuration = recResult.durationSec > 0 ? recResult.durationSec : Math.max(1, recordDuration);
     setIsRecording(false);
     setRecordDuration(0);
+
+    if (!recResult.ok || !recResult.audioUrl) {
+      setMicError(recResult.error || 'Could not finalize voice note recording.');
+      return;
+    }
     setMicError('');
+
+    let finalAudioUrl = recResult.audioUrl;
+    if (finalAudioUrl.startsWith('data:audio/')) {
+      const mimeMatch = finalAudioUrl.match(/^data:(audio\/[^;]+);/);
+      const contentType = mimeMatch ? mimeMatch[1] : 'audio/mp4';
+      const extension = contentType.includes('webm') ? 'webm' : 'm4a';
+      const cloudUrl = await uploadCloudMedia(finalAudioUrl, {
+        folder: 'voice',
+        extension,
+        contentType,
+      });
+      if (cloudUrl) {
+        finalAudioUrl = cloudUrl;
+      }
+    }
 
     await sendChatMessage({
       teamId: activeTeam.id,
       type: 'voice',
       voiceDuration: finalDuration,
       voiceWaveform: recResult.waveform && recResult.waveform.length > 0 ? recResult.waveform : [30, 60, 45, 80, 100, 65, 40, 85, 70, 50, 90, 40],
-      audioUrl: recResult.audioUrl,
+      audioUrl: finalAudioUrl,
       text: `Voice note (${finalDuration}s)`,
     });
 
@@ -278,22 +328,24 @@ export default function TeamChatScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+    <SafeAreaView style={styles.container} edges={isEmbeddedTab ? ['top'] : ['top', 'bottom']}>
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity
-          onPress={() => {
-            if (router.canGoBack()) {
-              router.back();
-            } else {
-              router.replace('/(tabs)');
-            }
-          }}
-          style={styles.backBtn}
-          activeOpacity={0.7}
-        >
-          <Ionicons name="arrow-back" size={22} color="#0f172a" />
-        </TouchableOpacity>
+        {!isEmbeddedTab && (
+          <TouchableOpacity
+            onPress={() => {
+              if (router.canGoBack()) {
+                router.back();
+              } else {
+                router.replace('/(tabs)');
+              }
+            }}
+            style={styles.backBtn}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="arrow-back" size={22} color="#0f172a" />
+          </TouchableOpacity>
+        )}
 
         <View style={styles.headerInfo}>
           <Text style={styles.teamName} numberOfLines={1}>
@@ -302,7 +354,7 @@ export default function TeamChatScreen() {
           <View style={styles.headerSubRow}>
             <View style={styles.liveDot} />
             <Text style={styles.memberCountText}>
-              {users.length} members • Voice & Discussion Active
+              {activeTeam ? `${teamMemberProfiles.length} member${teamMemberProfiles.length === 1 ? '' : 's'} • Voice & Discussion Active` : 'Join or create a team'}
             </Text>
           </View>
         </View>
@@ -356,7 +408,6 @@ export default function TeamChatScreen() {
         ref={scrollViewRef}
         style={styles.chatScroll}
         contentContainerStyle={styles.chatScrollContent}
-        onContentSizeChange={() => scrollViewRef.current?.scrollToEnd({ animated: true })}
       >
         <View style={styles.encryptionNotice}>
           <Ionicons name="shield-checkmark" size={14} color="#059669" />
@@ -463,9 +514,14 @@ export default function TeamChatScreen() {
                     {/* Waveform Bars */}
                     <View style={styles.waveformWrap}>
                       <View style={styles.waveformBars}>
-                        {(msg.voice_waveform || [30, 60, 45, 80, 100, 65, 40, 85, 70, 50, 90, 40]).map(
-                          (h, idx) => {
-                            const barProgress = (idx / 12) * 100;
+                        {(() => {
+                          const waveBars = (
+                            msg.voice_waveform && msg.voice_waveform.length > 0
+                              ? msg.voice_waveform
+                              : [30, 60, 45, 80, 100, 65, 40, 85, 70, 50, 90, 40]
+                          ).slice(0, 20);
+                          return waveBars.map((h, idx) => {
+                            const barProgress = ((idx + 1) / waveBars.length) * 100;
                             const isPlayed = isPlayingThis && playbackProgress >= barProgress;
                             return (
                               <View
@@ -485,8 +541,8 @@ export default function TeamChatScreen() {
                                 ]}
                               />
                             );
-                          }
-                        )}
+                          });
+                        })()}
                       </View>
                       <View style={styles.voiceDurationRow}>
                         <Text style={[styles.voiceDurationText, isMe ? styles.voiceDurationTextMe : null]}>
@@ -541,10 +597,37 @@ export default function TeamChatScreen() {
         </Animated.View>
       )}
 
+      {/* Microphone Permission / Recording Error Banner */}
+      {Boolean(micError) && (
+        <View
+          style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 8,
+            marginHorizontal: 14,
+            marginBottom: 8,
+            paddingHorizontal: 12,
+            paddingVertical: 10,
+            borderRadius: 12,
+            backgroundColor: '#ffe4e6',
+            borderWidth: 1,
+            borderColor: '#fda4af',
+          }}
+        >
+          <Ionicons name="mic-off" size={16} color="#be123c" />
+          <Text style={{ flex: 1, fontSize: 12, fontWeight: '600', color: '#be123c' }}>
+            {micError}
+          </Text>
+          <TouchableOpacity onPress={() => setMicError('')}>
+            <Ionicons name="close" size={16} color="#be123c" />
+          </TouchableOpacity>
+        </View>
+      )}
+
       {/* Bottom Bar: Text Input or Active Voice Recorder */}
       <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? (isEmbeddedTab ? 90 : 0) : 0}
       >
         {isRecording ? (
           <View style={styles.recordingTray}>

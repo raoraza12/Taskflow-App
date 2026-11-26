@@ -23,12 +23,15 @@ interface AnimatedTaskCardProps {
   onToggleStatus: (task: Task) => void;
   onPress: () => void;
   onEditPress?: () => void;
+  canEdit?: boolean;
+  canToggleStatus?: boolean;
 }
 
 function AnimatedTaskCheckbox({
   isDone,
   isInProgress,
   onToggle,
+  disabled,
   primaryColor,
   borderColor,
   isWhiteTheme,
@@ -36,6 +39,7 @@ function AnimatedTaskCheckbox({
   isDone: boolean;
   isInProgress?: boolean;
   onToggle: () => void;
+  disabled?: boolean;
   primaryColor: string;
   borderColor: string;
   isWhiteTheme: boolean;
@@ -43,6 +47,7 @@ function AnimatedTaskCheckbox({
   const scale = useSharedValue(1);
 
   const handlePress = () => {
+    if (disabled) return;
     triggerHaptic(isDone ? 'selection' : 'success');
     scale.value = withSequence(
       withTiming(0.8, { duration: 60 }),
@@ -57,7 +62,7 @@ function AnimatedTaskCheckbox({
   }));
 
   return (
-    <Pressable onPress={handlePress} style={styles.checkboxTouch}>
+    <Pressable onPress={handlePress} disabled={disabled} style={[styles.checkboxTouch, disabled && { opacity: 0.45 }]}>
       <Animated.View style={animStyle}>
         {isDone ? (
           <LinearGradient
@@ -95,6 +100,8 @@ export const AnimatedTaskCard: React.FC<AnimatedTaskCardProps> = ({
   onToggleStatus,
   onPress,
   onEditPress,
+  canEdit = true,
+  canToggleStatus = true,
 }) => {
   const isDone = task.status === 'done';
   const isInProgress = task.status === 'in_progress';
@@ -186,6 +193,7 @@ export const AnimatedTaskCard: React.FC<AnimatedTaskCardProps> = ({
             isDone={isDone}
             isInProgress={isInProgress}
             onToggle={() => onToggleStatus(task)}
+            disabled={!canToggleStatus}
             primaryColor={currentTheme.colors.primary}
             borderColor={currentTheme.colors.border}
             isWhiteTheme={isWhite}
@@ -280,8 +288,10 @@ export const AnimatedTaskCard: React.FC<AnimatedTaskCardProps> = ({
               { backgroundColor: currentTheme.colors.primaryLight },
             ]}
           >
-            <Ionicons name="create-outline" size={13} color={currentTheme.colors.primary} />
-            <Text style={[styles.editText, { color: currentTheme.colors.primary }]}>Edit</Text>
+            <Ionicons name={canEdit ? 'create-outline' : 'eye-outline'} size={13} color={currentTheme.colors.primary} />
+            <Text style={[styles.editText, { color: currentTheme.colors.primary }]}>
+              {canEdit ? 'Edit' : 'View'}
+            </Text>
           </TouchableOpacity>
         </View>
       </Pressable>

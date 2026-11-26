@@ -30,7 +30,6 @@ export default function TeamsScreen() {
     teams,
     getTeamMembers,
     getMemberRole,
-    canManageTeam,
     createTeam,
     requestJoinTeam,
     renameTeam,
@@ -61,53 +60,65 @@ export default function TeamsScreen() {
   const [joinPass, setJoinPass] = useState('');
   const [renameValue, setRenameValue] = useState('');
   const [error, setError] = useState('');
+  const [submittingModal, setSubmittingModal] = useState(false);
 
-  const activeTeamId = selectedTeamId || teams[0]?.id || '';
-  const activeTeam = teams.find((t) => t.id === activeTeamId);
+  const activeTeam = teams.find((t) => t.id === selectedTeamId) || teams[0];
+  const activeTeamId = activeTeam?.id || '';
   const isLeader = activeTeam?.owner_id === user?.id;
   const members = activeTeamId ? getTeamMembers(activeTeamId) : [];
   const currentRole = activeTeamId ? getMemberRole(activeTeamId) : null;
+  const teamPendingRequests = pendingJoinRequests.filter((r) => r.team_id === activeTeamId);
 
   const handleCreateTeam = async () => {
     setError('');
-    const res = await createTeam({ name: newTeamName, joinPassword: newTeamPass });
-    if (res.ok && res.team) {
-      setSelectedTeamId(res.team.id);
-      setNewTeamName('');
-      setNewTeamPass('');
-      setShowCreateModal(false);
-      showAlert('Success', `Team "${res.team.name}" created!`);
-    } else {
-      setError(res.error || 'Failed to create team');
+    setSubmittingModal(true);
+    try {
+      const res = await createTeam({ name: newTeamName, joinPassword: newTeamPass });
+      if (res.ok && res.team) {
+        setSelectedTeamId(res.team.id);
+        setNewTeamName('');
+        setNewTeamPass('');
+        setShowCreateModal(false);
+        showAlert('Success', `Team "${res.team.name}" created!`);
+      } else {
+        setError(res.error || 'Failed to create team');
+      }
+    } finally {
+      setSubmittingModal(false);
     }
   };
 
   const handleJoinTeam = async () => {
     setError('');
-    const res = await requestJoinTeam({
-      teamName: joinName,
-      inviteCode: joinCode,
-      joinPassword: joinPass,
-    });
-    if (res.ok) {
-      if (res.team) {
-        setSelectedTeamId(res.team.id);
-      }
-      const targetName = res.team?.name || joinName;
-      setJoinName('');
-      setJoinCode('');
-      setJoinPass('');
-      setShowJoinModal(false);
-      if (res.pendingApproval) {
-        showAlert(
-          'Join Request Submitted ⏳',
-          `Your request to join "${targetName}" has been sent to the Team Leader for approval. You will receive an alert once approved!`
-        );
+    setSubmittingModal(true);
+    try {
+      const res = await requestJoinTeam({
+        teamName: joinName,
+        inviteCode: joinCode,
+        joinPassword: joinPass,
+      });
+      if (res.ok) {
+        if (res.team) {
+          setSelectedTeamId(res.team.id);
+        }
+        const targetName = res.team?.name || joinName;
+        setJoinName('');
+        setJoinCode('');
+        setJoinPass('');
+        setShowJoinModal(false);
+        if (res.pendingApproval) {
+          showAlert(
+            'Join Request Submitted ⏳',
+            `Your request to join "${targetName}" has been sent to the Team Leader for approval. You will receive an alert once approved!`
+          );
+        } else {
+          showAlert('Welcome to the Team! 🎉', `You have successfully joined "${targetName}".`);
+        }
       } else {
-        showAlert('Welcome to the Team! 🎉', `You have successfully joined "${targetName}".`);
+        setError(res.error || 'Failed to join team');
       }
-    } else {
-      setError(res.error || 'Failed to join team');
+    } finally {
+      setSubmittingModal(false);
     }
   };
 
@@ -184,7 +195,7 @@ export default function TeamsScreen() {
 
   return (
     <ScreenWrapper
-      title="Teams Portal"
+      title="Teams"
       subtitle={activeTeam ? `${activeTeam.name} (${members.length} members)` : 'Create or join a team'}
       headerRight={
         <View style={styles.headerRight}>
@@ -257,15 +268,15 @@ export default function TeamsScreen() {
       )}
 
       {/* Pending Join Requests (Leader View) */}
-      {isLeader && pendingJoinRequests.length > 0 && (
+      {isLeader && teamPendingRequests.length > 0 && (
         <Card variant="bordered" style={styles.pendingCard}>
           <View style={styles.pendingHeader}>
             <Ionicons name="mail-unread-outline" size={20} color={Colors.warn} />
             <Text style={styles.pendingTitle}>
-              Pending Join Requests ({pendingJoinRequests.length})
+              Pending Join Requests ({teamPendingRequests.length})
             </Text>
           </View>
-          {pendingJoinRequests.map((req) => (
+          {teamPendingRequests.map((req) => (
             <View key={req.id} style={styles.requestRow}>
               <View style={{ flex: 1 }}>
                 <Text style={styles.reqUser}>{req.profile?.name || 'New User'}</Text>
@@ -529,6 +540,7 @@ export default function TeamsScreen() {
               <Button
                 title="Create Workspace 🚀"
                 onPress={handleCreateTeam}
+                loading={submittingModal}
                 style={{ flex: 1.4 }}
               />
             </View>
@@ -596,6 +608,7 @@ export default function TeamsScreen() {
               <Button
                 title="Send Join Request"
                 onPress={handleJoinTeam}
+                loading={submittingModal}
                 style={{ flex: 1.4 }}
               />
             </View>

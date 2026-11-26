@@ -11,7 +11,8 @@ import { DatePickerInput } from '../../src/components/DatePickerInput';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import * as DocumentPicker from 'expo-document-picker';
-import { TaskPriority, TaskStatus } from '../../src/types/database';
+import { TaskPriority, TaskAttachment } from '../../src/types/database';
+import { uploadCloudMedia } from '../../src/lib/cloudMedia';
 import { THEMES } from '../../src/constants/theme';
 
 export default function CreateTaskScreen() {
@@ -37,7 +38,6 @@ export default function CreateTaskScreen() {
   const [assigneeId, setAssigneeId] = useState(user?.id || '');
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
-  const [status, setStatus] = useState<TaskStatus>('todo');
   const [priority, setPriority] = useState<TaskPriority>('medium');
 
   // Dates: Assigned/Publish Date and Due Date (Defaults to current moment)
@@ -49,12 +49,17 @@ export default function CreateTaskScreen() {
   // Subtasks & File Attachments
   const [subtaskInput, setSubtaskInput] = useState('');
   const [subtasksList, setSubtasksList] = useState<string[]>([]);
-  const [attachedFile, setAttachedFile] = useState<{ name: string; size?: number } | null>(null);
+  const [attachedFile, setAttachedFile] = useState<{
+    name: string;
+    size?: number;
+    uri?: string;
+    mimeType?: string;
+  } | null>(null);
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  // Get all members of the selected team workspace + workspace users
+  // Strictly scope assignees to members of the selected team workspace
   const rawMembers = teamId ? getTeamMembers(teamId) : [];
   const allAvailableAssignees = React.useMemo(() => {
     const list: Array<{
@@ -84,23 +89,20 @@ export default function CreateTaskScreen() {
       }
     });
 
-    users.forEach((u) => {
-      if (!seen.has(u.id)) {
-        seen.add(u.id);
-        list.push({
-          id: `usr_${u.id}`,
-          user_id: u.id,
-          name: u.name,
-          username: u.username,
-          role: 'member',
-          picture: u.picture,
-          job_title: u.job_title,
-        });
-      }
-    });
+    if (list.length === 0 && user) {
+      list.push({
+        id: `usr_${user.id}`,
+        user_id: user.id,
+        name: user.name,
+        username: user.username,
+        role: 'owner',
+        picture: user.picture,
+        job_title: user.job_title,
+      });
+    }
 
     return list;
-  }, [rawMembers, users]);
+  }, [rawMembers, users, user]);
 
   const handleAddSubtaskItem = () => {
     if (!subtaskInput.trim()) return;
@@ -116,7 +118,12 @@ export default function CreateTaskScreen() {
       });
       if (!res.canceled && res.assets && res.assets.length > 0) {
         const file = res.assets[0];
-        setAttachedFile({ name: file.name, size: file.size });
+        setAttachedFile({
+          name: file.name,
+          size: file.size,
+          uri: file.uri,
+          mimeType: file.mimeType,
+        });
       }
     } catch {
       showAlert('Error', 'Could not open document picker');
@@ -136,18 +143,46 @@ export default function CreateTaskScreen() {
     }
 
     setLoading(true);
+
+    let attachments: TaskAttachment[] | undefined;
+    if (attachedFile) {
+      let resolvedPath = attachedFile.uri || '';
+      if (resolvedPath.startsWith('data:')) {
+        const ext = attachedFile.name.includes('.') ? attachedFile.name.split('.').pop() || 'bin' : 'bin';
+        const cloudUrl = await uploadCloudMedia(resolvedPath, {
+          folder: 'attachments',
+          extension: ext,
+          contentType: attachedFile.mimeType || 'application/octet-stream',
+        });
+        if (cloudUrl) resolvedPath = cloudUrl;
+      }
+      attachments = [
+        {
+          id: `att_${Date.now()}`,
+          task_id: '',
+          file_name: attachedFile.name,
+          file_path: resolvedPath,
+          file_size: attachedFile.size || 0,
+          mime_type: attachedFile.mimeType || 'application/octet-stream',
+          uploaded_by: user?.id || '',
+          created_at: new Date().toISOString(),
+        },
+      ];
+    }
+
     const res = await createTask({
       teamId: isPersonal ? null : teamId,
       isPersonal,
       assigneeId: isPersonal ? user!.id : (assigneeId || user!.id),
       title,
       description,
-      status,
+      status: 'todo',
       priority,
       assignedDate,
       dueDate,
       startTime,
       endTime,
+      attachments,
     });
 
     if (res.ok && res.task) {

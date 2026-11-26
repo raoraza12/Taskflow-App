@@ -18,6 +18,7 @@ interface DatePickerInputProps {
   onChangeDate: (date: string) => void;
   minDate?: string;
   placeholder?: string;
+  editable?: boolean;
 }
 
 export const DatePickerInput: React.FC<DatePickerInputProps> = ({
@@ -26,6 +27,7 @@ export const DatePickerInput: React.FC<DatePickerInputProps> = ({
   onChangeDate,
   minDate,
   placeholder = 'YYYY-MM-DD',
+  editable = true,
 }) => {
   const [modalVisible, setModalVisible] = useState(false);
   const [tempDate, setTempDate] = useState(value || new Date().toISOString().slice(0, 10));
@@ -49,23 +51,26 @@ export const DatePickerInput: React.FC<DatePickerInputProps> = ({
   return (
     <View style={styles.container}>
       <Text style={styles.label}>{label}</Text>
-      <View style={styles.inputRow}>
+      <View style={[styles.inputRow, !editable && { opacity: 0.7 }]}>
         <TextInput
           style={styles.input}
           value={value}
           onChangeText={onChangeDate}
           placeholder={placeholder}
           placeholderTextColor="#94a3b8"
+          editable={editable}
         />
         <TouchableOpacity
           style={styles.calendarBtn}
+          disabled={!editable}
           onPress={() => {
+            if (!editable) return;
             setTempDate(value || todayStr);
             setModalVisible(true);
           }}
           activeOpacity={0.7}
         >
-          <Ionicons name="calendar-outline" size={20} color="#4f46e5" />
+          <Ionicons name="calendar-outline" size={20} color={editable ? '#4f46e5' : '#94a3b8'} />
         </TouchableOpacity>
       </View>
 

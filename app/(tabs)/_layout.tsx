@@ -51,7 +51,7 @@ export default function TabLayout() {
           tabBarActiveTintColor: currentTheme.colors.primary,
           tabBarInactiveTintColor: currentTheme.colors.subtext,
           tabBarLabelStyle: {
-            fontSize: 11,
+            fontSize: 10.5,
             fontWeight: '700',
           },
           headerStyle: {
@@ -66,7 +66,7 @@ export default function TabLayout() {
         <Tabs.Screen
           name="index"
           options={{
-            title: 'Dashboard',
+            title: 'Home',
             tabBarIcon: ({ color, focused }) => (
               <Ionicons name={focused ? 'grid' : 'grid-outline'} size={22} color={color} />
             ),

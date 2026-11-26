@@ -24,7 +24,7 @@ import Animated, { FadeInDown } from 'react-native-reanimated';
 import { triggerHaptic } from '../../src/lib/haptics';
 
 export default function DashboardScreen() {
-  const { user, tasks, teams, today, updateTask, theme } = useApp();
+  const { user, tasks, teams, today, updateTask, submitTask, canManageTeam, theme } = useApp();
   const router = useRouter();
   const currentTheme = THEMES[theme] || THEMES.snow;
 
@@ -52,9 +52,24 @@ export default function DashboardScreen() {
   const completionPercent =
     todayTasks.length > 0 ? Math.round((doneToday / todayTasks.length) * 100) : 0;
 
-  const toggleTaskStatus = (task: Task) => {
+  const isLeaderOrOwner = (t: Task) =>
+    canManageTeam(t.team_id ?? '') ||
+    t.created_by_id === user?.id ||
+    isAppOwner(user) ||
+    Boolean(t.is_personal || !t.team_id);
+
+  const toggleTaskStatus = async (task: Task) => {
+    const canManage = isLeaderOrOwner(task);
+    if (!canManage) {
+      if (task.status === 'todo') {
+        await updateTask(task.id, { status: 'in_progress' });
+      } else if (task.status === 'in_progress') {
+        await submitTask(task.id, 'Submitted from Dashboard');
+      }
+      return;
+    }
     const nextStatus = task.status === 'done' ? 'todo' : 'done';
-    updateTask(task.id, { status: nextStatus });
+    await updateTask(task.id, { status: nextStatus });
   };
 
   return (
@@ -435,6 +450,7 @@ export default function DashboardScreen() {
             task={t}
             index={idx}
             currentTheme={currentTheme}
+            canEdit={isLeaderOrOwner(t)}
             onToggleStatus={toggleTaskStatus}
             onPress={() =>
               router.push({ pathname: '/tasks/edit', params: { taskId: t.id } })

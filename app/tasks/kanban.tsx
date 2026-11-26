@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { StyleSheet, View, Text, ScrollView, Pressable, TouchableOpacity } from 'react-native';
-import { useApp } from '../../src/context/AppContext';
+import { useApp, isAppOwner } from '../../src/context/AppContext';
+import { showAlert } from '../../src/lib/alerts';
 import { Colors, Radius, Spacing, Typography } from '../../src/constants/colors';
 import { ScreenWrapper } from '../../src/components/ScreenWrapper';
 import { Card } from '../../src/components/Card';
@@ -12,7 +13,7 @@ import { THEMES } from '../../src/constants/theme';
 import Animated, { FadeInRight, FadeInDown } from 'react-native-reanimated';
 
 export default function KanbanScreen() {
-  const { tasks, teams, user, updateTask, theme } = useApp();
+  const { tasks, teams, user, updateTask, submitTask, canManageTeam, theme } = useApp();
   const currentTheme = THEMES[theme] || THEMES.snow;
   const router = useRouter();
 
@@ -62,12 +63,36 @@ export default function KanbanScreen() {
     },
   ];
 
-  const moveTask = (task: Task, direction: 'prev' | 'next') => {
+  const canEditTask = (task: Task) =>
+    canManageTeam(task.team_id ?? '') ||
+    task.created_by_id === user?.id ||
+    isAppOwner(user) ||
+    Boolean(task.is_personal || !task.team_id);
+
+  const moveTask = async (task: Task, direction: 'prev' | 'next') => {
     const order: TaskStatus[] = ['todo', 'in_progress', 'submitted', 'done'];
     const currentIndex = order.indexOf(task.status);
     const nextIndex = direction === 'next' ? currentIndex + 1 : currentIndex - 1;
-    if (nextIndex >= 0 && nextIndex < order.length) {
-      updateTask(task.id, { status: order[nextIndex] });
+    if (nextIndex < 0 || nextIndex >= order.length) return;
+
+    const targetStatus = order[nextIndex];
+    const isLeader = canEditTask(task);
+    const isAssignee = task.assignee_id === user?.id;
+
+    if (!isLeader && !isAssignee) {
+      showAlert('Permission Denied', 'Only the assignee or Team Leader can move this task.');
+      return;
+    }
+    if (!isLeader && targetStatus === 'done') {
+      showAlert('Approval Required', 'Only a Team Leader or Admin can approve and mark tasks Done.');
+      return;
+    }
+    const res =
+      targetStatus === 'submitted' && !isLeader
+        ? await submitTask(task.id, 'Submitted from Kanban Board')
+        : await updateTask(task.id, { status: targetStatus });
+    if (!res.ok) {
+      showAlert('Action Blocked', res.error || 'Could not update task status');
     }
   };
 
@@ -274,30 +299,46 @@ export default function KanbanScreen() {
                         </View>
 
                         {/* Move Column Controls */}
-                        <View style={[styles.moveBar, { borderTopColor: currentTheme.colors.border }]}>
-                          {col.key !== 'todo' && (
-                            <TouchableOpacity
-                              style={[styles.moveBtn, { backgroundColor: currentTheme.colors.bgSoft }]}
-                              onPress={() => moveTask(t, 'prev')}
-                            >
-                              <Ionicons name="arrow-back" size={12} color={currentTheme.colors.text} />
-                              <Text style={[styles.moveText, { color: currentTheme.colors.text }]}>
-                                Back
-                              </Text>
-                            </TouchableOpacity>
-                          )}
-                          {col.key !== 'done' && (
-                            <TouchableOpacity
-                              style={[styles.moveBtn, { backgroundColor: currentTheme.colors.bgSoft, marginLeft: 'auto' }]}
-                              onPress={() => moveTask(t, 'next')}
-                            >
-                              <Text style={[styles.moveText, { color: currentTheme.colors.text }]}>
-                                {col.key === 'submitted' ? 'Approve' : 'Advance'}
-                              </Text>
-                              <Ionicons name="arrow-forward" size={12} color={currentTheme.colors.text} />
-                            </TouchableOpacity>
-                          )}
-                        </View>
+                        {(() => {
+                          const leaderCanApprove = canEditTask(t);
+                          const memberCanMove = leaderCanApprove || t.assignee_id === user?.id;
+                          const canAdvance =
+                            col.key !== 'done' && (col.key !== 'submitted' || leaderCanApprove);
+                          const canGoBack = col.key !== 'todo' && (col.key !== 'done' || leaderCanApprove);
+
+                          if (!memberCanMove) return null;
+
+                          return (
+                            <View style={[styles.moveBar, { borderTopColor: currentTheme.colors.border }]}>
+                              {canGoBack && (
+                                <TouchableOpacity
+                                  style={[styles.moveBtn, { backgroundColor: currentTheme.colors.bgSoft }]}
+                                  onPress={() => moveTask(t, 'prev')}
+                                >
+                                  <Ionicons name="arrow-back" size={12} color={currentTheme.colors.text} />
+                                  <Text style={[styles.moveText, { color: currentTheme.colors.text }]}>
+                                    Back
+                                  </Text>
+                                </TouchableOpacity>
+                              )}
+                              {canAdvance ? (
+                                <TouchableOpacity
+                                  style={[styles.moveBtn, { backgroundColor: currentTheme.colors.bgSoft, marginLeft: 'auto' }]}
+                                  onPress={() => moveTask(t, 'next')}
+                                >
+                                  <Text style={[styles.moveText, { color: currentTheme.colors.text }]}>
+                                    {col.key === 'submitted' ? 'Approve' : col.key === 'in_progress' && !leaderCanApprove ? 'Submit' : 'Advance'}
+                                  </Text>
+                                  <Ionicons name="arrow-forward" size={12} color={currentTheme.colors.text} />
+                                </TouchableOpacity>
+                              ) : col.key === 'submitted' && !leaderCanApprove ? (
+                                <Text style={[styles.moveText, { color: '#0284c7', marginLeft: 'auto', fontSize: 10 }]}>
+                                  Awaiting Leader
+                                </Text>
+                              ) : null}
+                            </View>
+                          );
+                        })()}
                       </Card>
                     );
                   })

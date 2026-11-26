@@ -8,7 +8,7 @@ const assetsDir = path.join(__dirname, '..', 'assets');
 if (fs.existsSync(distIndex)) {
   let html = fs.readFileSync(distIndex, 'utf8');
 
-  // Deep link forwarder for Native Android / iOS Google OAuth Return
+  // Deep link forwarder STRICTLY for Native Android / iOS Google OAuth Return (never hijack normal mobile browsers)
   const oauthScript = `
   <script>
     (function() {
@@ -18,14 +18,15 @@ if (fs.existsSync(distIndex)) {
         var fullQuery = hash + search;
         if (fullQuery && (fullQuery.indexOf('access_token=') !== -1 || fullQuery.indexOf('id_token=') !== -1)) {
           var isNativeState = fullQuery.indexOf('state=native_app') !== -1;
-          var isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-          if (isNativeState || isMobile) {
-            var nativeUrl = 'taskflow://auth' + (hash || ('#' + search.replace(/^\\?/, '')));
-            // Direct native intent redirect
-            window.location.replace(nativeUrl);
+          if (isNativeState) {
+            var fragment = hash || ('#' + search.replace(/^\\?/, ''));
+            var nativeUrl = 'taskflow://auth' + fragment;
+            var isAndroid = /Android/i.test(navigator.userAgent);
+            var androidIntent = 'intent://auth' + fragment + '#Intent;scheme=taskflow;package=com.taskflow.app;end';
+            window.location.replace(isAndroid ? androidIntent : nativeUrl);
             setTimeout(function() {
               window.location.href = nativeUrl;
-            }, 250);
+            }, 300);
           }
         }
       } catch (e) {}
